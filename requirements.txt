@@ -1,0 +1,10 @@
+flask
+flask-cors
+rembg
+pillow
+werkzeug
+psutil
+waitress
+python-dotenv
+firebase-admin
+gunicorn==21.2.0

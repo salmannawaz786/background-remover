@@ -1,0 +1,358 @@
+from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for
+from flask_cors import CORS
+from rembg import remove, new_session
+from PIL import Image
+import io
+import logging
+import traceback
+from werkzeug.utils import secure_filename
+import os
+from concurrent.futures import ThreadPoolExecutor
+import time
+from functools import lru_cache, wraps
+import gc
+import psutil
+from threading import Timer
+import uuid
+import sys
+from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, storage, auth as firebase_auth
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('app.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Initialize Firebase Admin (for authentication and storage)
+try:
+    # Check if Firebase credentials are provided as JSON string (for Digital Ocean App Platform)
+    firebase_creds_json = os.getenv('FIREBASE_CREDENTIALS_JSON')
+    
+    if firebase_creds_json:
+        # Parse JSON from environment variable
+        import json
+        cred_dict = json.loads(firebase_creds_json)
+        cred = credentials.Certificate(cred_dict)
+        logger.info("Using Firebase credentials from environment variable")
+    else:
+        # Use credentials file (for local development and Droplet)
+        cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json'))
+        logger.info("Using Firebase credentials from file")
+    
+    firebase_admin.initialize_app(cred, {
+        'storageBucket': os.getenv('FIREBASE_STORAGE_BUCKET', 'your-project.appspot.com')
+    })
+    bucket = storage.bucket()
+    logger.info(f"Firebase initialized successfully with bucket: {os.getenv('FIREBASE_STORAGE_BUCKET')}")
+except Exception as e:
+    logger.warning(f"Firebase initialization failed: {str(e)}. Continuing without Firebase.")
+    bucket = None
+
+# Enable CORS
+CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST"], allow_headers=["Content-Type"])
+
+# Configure upload folder and allowed extensions
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
+
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
+
+# Resource monitoring
+MAX_MEMORY_PERCENT = 80
+memory_warning_issued = False
+
+# Thread pool - BALANCED for quality and speed
+cpu_count = psutil.cpu_count(logical=False) or 2
+max_workers = int(os.getenv('MAX_WORKERS', max(2, min(cpu_count, 8))))
+executor = ThreadPoolExecutor(max_workers=max_workers)
+logger.info(f"Initialized thread pool with {executor._max_workers} workers")
+
+# Load rembg model - BALANCED SETTINGS
+model_name = os.getenv('MODEL_NAME', 'u2net')
+try:
+    session_rembg = new_session(model_name)
+    logger.info(f"Successfully loaded rembg model: {model_name}")
+except Exception as e:
+    logger.error(f"Failed to load model: {str(e)}")
+    session_rembg = None
+
+# Authentication decorator
+def require_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get token from header
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Unauthorized - No token provided'}), 401
+        
+        token = auth_header.split('Bearer ')[1]
+        
+        try:
+            # Verify Firebase token
+            decoded_token = firebase_auth.verify_id_token(token)
+            request.user_id = decoded_token['uid']
+            request.user_email = decoded_token.get('email')
+            return f(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Token verification failed: {str(e)}")
+            return jsonify({'error': 'Unauthorized - Invalid token'}), 401
+    
+    return decorated_function
+
+def process_image(image_path):
+    """Process image with BALANCED quality/speed settings"""
+    start_time = time.time()
+    
+    try:
+        # Check memory
+        mem_usage = check_memory_usage()
+        if mem_usage > 90:
+            raise MemoryError("Server under heavy load")
+        
+        with Image.open(image_path) as input_image:
+            # BALANCED: Resize to 1200px (better quality than 1000px, faster than 1500px)
+            max_size = 1200
+            original_size = input_image.size
+            
+            if max(input_image.size) > max_size:
+                ratio = max_size / max(input_image.size)
+                new_size = tuple(int(dim * ratio) for dim in input_image.size)
+                # BALANCED: Use LANCZOS for better quality (worth the small speed cost)
+                input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
+                logger.info(f"Resized from {original_size} to {input_image.size}")
+            
+            if session_rembg is None:
+                raise ValueError("Model not loaded")
+            
+            # BALANCED: Keep alpha_matting disabled, but enable post_process_mask for better quality
+            output_image = remove(
+                input_image, 
+                session=session_rembg,
+                alpha_matting=False,
+                post_process_mask=True  # Better edge quality
+            )
+            
+            # Cleanup
+            del input_image
+            gc.collect()
+            
+            # BALANCED: Compress level 5 (good quality, reasonable speed)
+            img_io = io.BytesIO()
+            output_image.save(img_io, 'PNG', optimize=True, compress_level=5)
+            img_io.seek(0)
+            
+            processing_time = time.time() - start_time
+            logger.info(f"Processed in {processing_time:.2f}s")
+            
+            return img_io, processing_time
+    except Exception as e:
+        logger.error(f"Processing error: {str(e)}")
+        raise
+
+# Cache processed images
+CACHE_SIZE = 32
+processed_images = lru_cache(maxsize=CACHE_SIZE)(process_image)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def check_memory_usage():
+    global memory_warning_issued
+    try:
+        memory = psutil.virtual_memory()
+        percent_used = memory.percent
+        
+        if percent_used > MAX_MEMORY_PERCENT and not memory_warning_issued:
+            logger.warning(f"Memory critical: {percent_used}%. Clearing cache...")
+            processed_images.cache_clear()
+            gc.collect()
+            memory_warning_issued = True
+        elif percent_used < MAX_MEMORY_PERCENT - 10:
+            memory_warning_issued = False
+        
+        return percent_used
+    except Exception as e:
+        logger.error(f"Memory check error: {str(e)}")
+        return 0
+
+# Routes
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/login')
+def login():
+    return render_template('login.html')
+
+@app.route('/signup')
+def signup():
+    return render_template('signup.html')
+
+@app.route('/verify-token', methods=['POST'])
+def verify_token():
+    """Verify Firebase token from frontend"""
+    try:
+        data = request.get_json()
+        token = data.get('token')
+        
+        if not token:
+            return jsonify({'error': 'No token provided'}), 400
+        
+        # Verify the token
+        decoded_token = firebase_auth.verify_id_token(token)
+        uid = decoded_token['uid']
+        
+        # Store in session
+        session['user_id'] = uid
+        session['user_email'] = decoded_token.get('email')
+        
+        return jsonify({
+            'success': True,
+            'uid': uid,
+            'email': decoded_token.get('email')
+        })
+    except Exception as e:
+        logger.error(f"Token verification error: {str(e)}")
+        return jsonify({'error': 'Invalid token'}), 401
+
+@app.route('/logout')
+def logout():
+    """Clear session"""
+    session.clear()
+    return jsonify({'success': True})
+
+@app.route('/upload', methods=['POST'])
+def upload_image():
+    """Upload and process image - AUTHENTICATION OPTIONAL"""
+    try:
+        # Check memory
+        if check_memory_usage() > 90:
+            return jsonify({'error': 'Server under heavy load'}), 503
+        
+        if 'image_file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+        
+        file = request.files['image_file']
+        
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type'}), 400
+        
+        # Save with unique filename
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"{unique_id}_{secure_filename(file.filename)}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        try:
+            # Process image
+            future = executor.submit(processed_images, filepath)
+            img_io, processing_time = future.result(timeout=30)
+            
+            # Copy image bytes for Firebase upload (so we can send response immediately)
+            img_io.seek(0)
+            image_bytes = img_io.read()
+            
+            # Upload to Firebase in background (truly fire-and-forget, no waiting)
+            if bucket:
+                def firebase_upload_background(img_bytes, blob_name):
+                    try:
+                        blob = bucket.blob(blob_name)
+                        blob.upload_from_string(img_bytes, content_type='image/png', timeout=30)
+                        blob.make_public()
+                        logger.info(f"Firebase upload success: {blob.public_url}")
+                    except Exception as e:
+                        logger.error(f"Firebase background upload error: {str(e)[:100]}")
+                
+                # Submit and forget - don't wait for result
+                blob_name = f"removed-bg-images/{unique_id}_{file.filename}"
+                executor.submit(firebase_upload_background, image_bytes, blob_name)
+                logger.info(f"Firebase upload started in background: {blob_name}")
+            
+            # Send response immediately (don't wait for Firebase)
+            response_io = io.BytesIO(image_bytes)
+            response = send_file(response_io, mimetype='image/png')
+            response.headers['X-Processing-Time'] = str(processing_time)
+            
+            return response
+        except TimeoutError:
+            return jsonify({'error': 'Processing timeout'}), 504
+        except Exception as e:
+            logger.error(f"Processing error: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+        finally:
+            # Cleanup
+            if os.path.exists(filepath):
+                os.remove(filepath)
+    
+    except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    mem_usage = check_memory_usage()
+    return jsonify({
+        'status': 'healthy' if mem_usage < MAX_MEMORY_PERCENT else 'degraded',
+        'model_loaded': session_rembg is not None,
+        'memory_usage': f"{mem_usage}%",
+        'workers': executor._max_workers
+    })
+
+# Error handlers
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'File too large (max 10MB)'}), 413
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal error: {str(error)}")
+    return jsonify({'error': 'Internal server error'}), 500
+
+# Cleanup old files
+def cleanup_old_files():
+    try:
+        current_time = time.time()
+        for filename in os.listdir(UPLOAD_FOLDER):
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            if os.path.isfile(filepath):
+                if current_time - os.path.getmtime(filepath) > 3600:  # 1 hour
+                    os.remove(filepath)
+    except Exception as e:
+        logger.error(f"Cleanup error: {str(e)}")
+    finally:
+        Timer(1800, cleanup_old_files).start()  # Every 30 min
+
+if __name__ == '__main__':
+    # Start cleanup
+    cleanup_timer = Timer(1800, cleanup_old_files)
+    cleanup_timer.daemon = True
+    cleanup_timer.start()
+    
+    logger.info("Starting Background Remover service...")
+    logger.info(f"Model: {model_name}, Workers: {max_workers}")
+    
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=5000, threads=4)
