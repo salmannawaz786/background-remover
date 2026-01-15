@@ -3,40 +3,21 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebas
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
 import { getFirestore, doc, setDoc, getDoc, updateDoc, increment } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
 
-// Firebase configuration - loaded from server for security
-let app, auth, db;
-let firebaseInitialized = false;
+// Firebase configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyA8D2w0J8auihu3BbR8McIpoSduDfI2jxo",
+    authDomain: "are-you-genius-1f253.firebaseapp.com",
+    projectId: "are-you-genius-1f253",
+    storageBucket: "are-you-genius-1f253.firebasestorage.app",
+    messagingSenderId: "771421054895",
+    appId: "1:771421054895:web:7a27a9c69f722069ebb15a",
+    measurementId: "G-RE3R9WGMH9"
+};
 
-async function initFirebase() {
-    try {
-        const response = await fetch('/api/config');
-        const config = await response.json();
-        app = initializeApp(config);
-        auth = getAuth(app);
-        db = getFirestore(app);
-        firebaseInitialized = true;
-        console.log('Firebase initialized successfully');
-        return true;
-    } catch (error) {
-        console.error('Failed to initialize Firebase:', error);
-        return false;
-    }
-}
-
-// Wait for Firebase to be ready before auth operations
-async function waitForFirebase() {
-    if (firebaseInitialized) return true;
-    // Wait up to 5 seconds for Firebase to initialize
-    for (let i = 0; i < 50; i++) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        if (firebaseInitialized) return true;
-    }
-    console.error('Firebase initialization timeout');
-    return false;
-}
-
-// Initialize Firebase immediately
-initFirebase();
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
 // Function to display error messages
 function displayErrorMessage(message) {
@@ -321,12 +302,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const email = document.getElementById("email").value;
             const password = document.getElementById("password").value;
 
-            // Wait for Firebase to be ready
-            if (!await waitForFirebase()) {
-                displayErrorMessage("Unable to connect. Please refresh and try again.");
-                return;
-            }
-
             try {
                 const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 await handleAuthSuccess(userCredential.user);
@@ -354,12 +329,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (password !== repeatPassword) {
                 displayErrorMessage("Passwords do not match");
-                return;
-            }
-
-            // Wait for Firebase to be ready
-            if (!await waitForFirebase()) {
-                displayErrorMessage("Unable to connect. Please refresh and try again.");
                 return;
             }
 

@@ -609,18 +609,20 @@
   position: fixed;
   top: 0;
   right: -100%;
-  width: 100%;
-  max-width: 100%;
+  width: 85%;
+  max-width: 320px;
   height: 100vh;
+  height: 100dvh;
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   z-index: 1001;
-  padding: 6rem 2rem 2rem;
+  padding: 5rem 1.5rem 2rem;
   overflow-y: auto;
   overflow-x: hidden;
   transition: right 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
 }
 
 [data-theme="dark"] .mobile-menu {
@@ -646,13 +648,16 @@
 }
 
 .mobile-menu .tools-link {
-  font-size: 1.2rem;
-  padding: 1rem 1.5rem;
+  font-size: 1rem;
+  padding: 0.75rem 1rem;
   width: 100%;
   color: var(--ink-dark, #18181b);
   background: rgba(236, 72, 153, 0.05);
   border-radius: 12px;
   margin-bottom: 0.5rem;
+  box-sizing: border-box;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .mobile-menu .menu-item-wrapper .tools-dropdown {
