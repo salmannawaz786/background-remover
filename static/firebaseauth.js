@@ -5,6 +5,7 @@ import { getFirestore, doc, setDoc, getDoc, updateDoc, increment } from 'https:/
 
 // Firebase configuration - loaded from server for security
 let app, auth, db;
+let firebaseInitialized = false;
 
 async function initFirebase() {
     try {
@@ -13,6 +14,8 @@ async function initFirebase() {
         app = initializeApp(config);
         auth = getAuth(app);
         db = getFirestore(app);
+        firebaseInitialized = true;
+        console.log('Firebase initialized successfully');
         return true;
     } catch (error) {
         console.error('Failed to initialize Firebase:', error);
@@ -20,8 +23,20 @@ async function initFirebase() {
     }
 }
 
+// Wait for Firebase to be ready before auth operations
+async function waitForFirebase() {
+    if (firebaseInitialized) return true;
+    // Wait up to 5 seconds for Firebase to initialize
+    for (let i = 0; i < 50; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (firebaseInitialized) return true;
+    }
+    console.error('Firebase initialization timeout');
+    return false;
+}
+
 // Initialize Firebase immediately
-const firebaseReady = initFirebase();
+initFirebase();
 
 // Function to display error messages
 function displayErrorMessage(message) {
@@ -280,10 +295,7 @@ function handleInvite() {
 }
 
 // Document ready event listeners
-document.addEventListener('DOMContentLoaded', async () => {
-    // Wait for Firebase to initialize
-    await firebaseReady;
-    
+document.addEventListener('DOMContentLoaded', () => {
     // Handle signup button on main page
     const signUpButton = document.getElementById("sign-up-btn");
     if (signUpButton) {
@@ -309,10 +321,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             const email = document.getElementById("email").value;
             const password = document.getElementById("password").value;
 
+            // Wait for Firebase to be ready
+            if (!await waitForFirebase()) {
+                displayErrorMessage("Unable to connect. Please refresh and try again.");
+                return;
+            }
+
             try {
-                if (!auth) {
-                    throw new Error("Authentication not initialized");
-                }
                 const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 await handleAuthSuccess(userCredential.user);
             } catch (error) {
@@ -342,10 +357,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
 
+            // Wait for Firebase to be ready
+            if (!await waitForFirebase()) {
+                displayErrorMessage("Unable to connect. Please refresh and try again.");
+                return;
+            }
+
             try {
-                if (!auth) {
-                    throw new Error("Authentication not initialized");
-                }
                 const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                 const user = userCredential.user;
 
