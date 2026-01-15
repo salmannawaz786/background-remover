@@ -3,20 +3,25 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebas
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, sendEmailVerification } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
 import { getFirestore, doc, setDoc, getDoc, updateDoc, increment } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
 
-// Firebase configuration
-const firebaseConfig = {
-    apiKey: "AIzaSyA8D2w0J8auihu3BbR8McIpoSduDfI2jxo",
-    authDomain: "are-you-genius-1f253.firebaseapp.com",
-    projectId: "are-you-genius-1f253",
-    storageBucket: "are-you-genius-1f253.firebasestorage.app",
-    messagingSenderId: "771421054895",
-    appId: "1:771421054895:web:7a27a9c69f722069ebb15a",
-    measurementId: "G-RE3R9WGMH9"
-  };
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// Firebase configuration - loaded from server for security
+let app, auth, db;
+
+async function initFirebase() {
+    try {
+        const response = await fetch('/api/config');
+        const config = await response.json();
+        app = initializeApp(config);
+        auth = getAuth(app);
+        db = getFirestore(app);
+        return true;
+    } catch (error) {
+        console.error('Failed to initialize Firebase:', error);
+        return false;
+    }
+}
+
+// Initialize Firebase immediately
+const firebaseReady = initFirebase();
 
 // Function to display error messages
 function displayErrorMessage(message) {

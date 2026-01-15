@@ -18,6 +18,8 @@ import sys
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, storage, auth as firebase_auth
+from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for, send_from_directory
+# Load environment variables
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +27,19 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    # Only allow specific file types
+    allowed_extensions = {'.css', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.js'}
+    file_ext = os.path.splitext(filename)[1].lower()
+    
+    if file_ext not in allowed_extensions:
+        return "File not found", 404
+    
+    try:
+        return send_from_directory('static', filename)
+    except:
+        return "File not found", 404
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -206,6 +221,33 @@ def login():
 @app.route('/signup')
 def signup():
     return render_template('signup.html')
+
+@app.route('/api/config')
+def get_firebase_config():
+    """Serve Firebase config - only accessible from same origin"""
+    # Check referer to ensure request is from our domain
+    referer = request.headers.get('Referer', '')
+    allowed_origins = [
+        'https://bgremover.sallulabs.com',
+        'http://localhost:5000',
+        'http://127.0.0.1:5000'
+    ]
+    
+    is_allowed = any(referer.startswith(origin) for origin in allowed_origins) or not referer
+    
+    if not is_allowed:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Return Firebase client config (these are safe to expose with domain restrictions)
+    return jsonify({
+        'apiKey': os.getenv('FIREBASE_API_KEY', 'AIzaSyA8D2w0J8auihu3BbR8McIpoSduDfI2jxo'),
+        'authDomain': os.getenv('FIREBASE_AUTH_DOMAIN', 'are-you-genius-1f253.firebaseapp.com'),
+        'projectId': os.getenv('FIREBASE_PROJECT_ID', 'are-you-genius-1f253'),
+        'storageBucket': os.getenv('FIREBASE_STORAGE_BUCKET', 'are-you-genius-1f253.firebasestorage.app'),
+        'messagingSenderId': os.getenv('FIREBASE_MESSAGING_SENDER_ID', '771421054895'),
+        'appId': os.getenv('FIREBASE_APP_ID', '1:771421054895:web:7a27a9c69f722069ebb15a'),
+        'measurementId': os.getenv('FIREBASE_MEASUREMENT_ID', 'G-RE3R9WGMH9')
+    })
 
 @app.route('/verify-token', methods=['POST'])
 def verify_token():
