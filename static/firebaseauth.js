@@ -280,7 +280,10 @@ function handleInvite() {
 }
 
 // Document ready event listeners
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Wait for Firebase to initialize
+    await firebaseReady;
+    
     // Handle signup button on main page
     const signUpButton = document.getElementById("sign-up-btn");
     if (signUpButton) {
@@ -405,8 +408,9 @@ async function updateUserStats(userId) {
     }
 }
 
-// Authentication state observer
-onAuthStateChanged(auth, async (user) => {
+// Authentication state observer - wait for Firebase init
+firebaseReady.then(() => {
+    onAuthStateChanged(auth, async (user) => {
     const signUpButton = document.getElementById("sign-up-btn");
     const profileContainer = document.querySelector('.profile-container');
     const profilePic = document.getElementById("profile-pic");
@@ -502,6 +506,7 @@ onAuthStateChanged(auth, async (user) => {
 
        
     }
+    });
 });
 
 // Dropdown toggle function
