@@ -129,7 +129,36 @@ document.querySelectorAll('.tool-image').forEach(container => {
             container.classList.toggle('active', isActive);
         });
     }
+});
 
-    
+// Mobile Menu Toggle
+document.addEventListener('DOMContentLoaded', () => {
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const mobileMenu = document.querySelector('.mobile-menu');
+    const hamburgerIcon = document.querySelector('.hamburger-icon');
+
+    if (menuToggle && mobileMenu) {
+        menuToggle.addEventListener('click', () => {
+            mobileMenu.classList.toggle('active');
+            hamburgerIcon.classList.toggle('active');
+        });
+
+        // Close menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!menuToggle.contains(e.target) && !mobileMenu.contains(e.target)) {
+                mobileMenu.classList.remove('active');
+                hamburgerIcon.classList.remove('active');
+            }
+        });
+
+        // Close menu when clicking a link
+        const mobileMenuLinks = mobileMenu.querySelectorAll('a');
+        mobileMenuLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                mobileMenu.classList.remove('active');
+                hamburgerIcon.classList.remove('active');
+            });
+        });
+    }
 });
 

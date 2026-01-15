@@ -280,7 +280,10 @@ function handleInvite() {
 }
 
 // Document ready event listeners
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Wait for Firebase to initialize
+    await firebaseReady;
+    
     // Handle signup button on main page
     const signUpButton = document.getElementById("sign-up-btn");
     if (signUpButton) {
@@ -307,6 +310,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const password = document.getElementById("password").value;
 
             try {
+                if (!auth) {
+                    throw new Error("Authentication not initialized");
+                }
                 const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 await handleAuthSuccess(userCredential.user);
             } catch (error) {
@@ -337,6 +343,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
+                if (!auth) {
+                    throw new Error("Authentication not initialized");
+                }
                 const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                 const user = userCredential.user;
 
