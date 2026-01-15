@@ -155,10 +155,14 @@
             <div class="mode-selector">
                 <button class="mode-button active" data-mode="single">Single Image</button>
                 <button class="mode-button" data-mode="batch">Multiple Images</button>
-                <label class="hd-toggle">
-                    <input type="checkbox" id="hd-quality-toggle" />
-                    <span>HD Quality</span>
-                </label>
+                <div class="hd-quality-container">
+                    <span class="hd-label">HD Quality</span>
+                    <label class="toggle-switch" id="hd-toggle-wrapper">
+                        <input type="checkbox" id="hd-quality-toggle" disabled />
+                        <span class="slider"></span>
+                    </label>
+                    <span class="lock-icon" id="lock-icon" style="display: none;">🔒</span>
+                </div>
             </div>
 
             <input type="file" id="image-input" style="display:none;" accept="image/*"/>
@@ -556,6 +560,50 @@
                 link.click();
                 document.body.removeChild(link);
             });
+        });
+
+        // HD Quality Toggle Authentication Check
+        const hdToggle = document.getElementById('hd-quality-toggle');
+        const hdToggleWrapper = document.getElementById('hd-toggle-wrapper');
+        const lockIcon = document.getElementById('lock-icon');
+
+        function checkHDAccess() {
+            // Check if user is authenticated (check session or auth-required class)
+            const isAuthenticated = !document.querySelector('.auth-required')?.style.display.includes('none');
+            const userLoggedIn = document.querySelector('.profile-container')?.style.display !== 'none';
+            
+            if (userLoggedIn || isAuthenticated) {
+                // User is signed in - enable toggle
+                hdToggle.disabled = false;
+                lockIcon.style.display = 'none';
+            } else {
+                // User not signed in - keep locked
+                hdToggle.disabled = true;
+                hdToggle.checked = false;
+                lockIcon.style.display = 'inline';
+            }
+        }
+
+        // Check access on page load
+        checkHDAccess();
+
+        // Re-check when auth state changes
+        setInterval(checkHDAccess, 1000);
+
+        // Handle click on disabled toggle - show sign-up prompt
+        hdToggleWrapper.addEventListener('click', (e) => {
+            if (hdToggle.disabled) {
+                e.preventDefault();
+                if (confirm('HD Quality is only available for registered users.\n\nSign up now to unlock:\n• HD Quality (up to 3000px)\n• Larger file uploads (10MB)\n• Unlimited processing\n\nWould you like to sign up?')) {
+                    window.location.href = '/signup';
+                }
+            }
+        });
+
+        lockIcon.addEventListener('click', () => {
+            if (confirm('HD Quality is only available for registered users.\n\nSign up now to unlock:\n• HD Quality (up to 3000px)\n• Larger file uploads (10MB)\n• Unlimited processing\n\nWould you like to sign up?')) {
+                window.location.href = '/signup';
+            }
         });
         
     </script>
