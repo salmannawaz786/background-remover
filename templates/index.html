@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="../static/index.css">
     <link rel="stylesheet" href="../static/footer.css">
     <link rel="stylesheet" href="../static/theme-toggle.css">
+    <link rel="stylesheet" href="../static/quality-toggle.css">
     <script defer src="../static/scripts.js"></script>
     <link rel="stylesheet" href="../static/theme.css">
     <script src="https://kit.fontawesome.com/0401efc0fe.js" crossorigin="anonymous"></script>
@@ -154,6 +155,19 @@
             <div class="mode-selector">
                 <button class="mode-button active" data-mode="single">Single Image</button>
                 <button class="mode-button" data-mode="batch">Multiple Images</button>
+            </div>
+
+            <div class="quality-toggle" style="margin: 20px 0; text-align: center;">
+                <label class="hd-toggle-label">
+                    <input type="checkbox" id="hd-quality-toggle" />
+                    <span class="toggle-text">
+                        ✨ HD Quality 
+                        <span class="premium-badge">PREMIUM</span>
+                    </span>
+                    <small style="display: block; margin-top: 5px; opacity: 0.7;">
+                        High-resolution output (up to 3000px) with enhanced edge quality
+                    </small>
+                </label>
             </div>
 
             <input type="file" id="image-input" style="display:none;" accept="image/*"/>
@@ -406,9 +420,13 @@
 
                 const formData = new FormData();
                 formData.append('image_file', file);
+                
+                // Add HD quality setting
+                const hdToggle = document.getElementById('hd-quality-toggle');
+                formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
 
                 try {
-                    const response = await fetch('http://127.0.0.1:5000/upload', {
+                    const response = await fetch('/upload', {
                         method: 'POST',
                         body: formData
                     });
@@ -431,7 +449,18 @@
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';
                     } else {
-                        alert('Error: ' + response.statusText);
+                        // Handle error responses with proper messages
+                        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+                        
+                        if (errorData.requiresAuth) {
+                            // Show sign-up prompt for premium features
+                            if (confirm(errorData.error + '\n\nWould you like to sign up now?')) {
+                                window.location.href = '/signup';
+                            }
+                        } else {
+                            alert(errorData.error || 'Error processing image');
+                        }
+                        
                         // Restore UI on error
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';

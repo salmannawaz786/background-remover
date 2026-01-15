@@ -133,8 +133,8 @@ def require_auth(f):
     
     return decorated_function
 
-def process_image(image_path):
-    """Process image with BALANCED quality/speed settings"""
+def process_image(image_path, hd_quality=False):
+    """Process image with quality settings based on user tier"""
     start_time = time.time()
     
     try:
@@ -144,39 +144,46 @@ def process_image(image_path):
             raise MemoryError("Server under heavy load")
         
         with Image.open(image_path) as input_image:
-            # BALANCED: Resize to 1200px (better quality than 1000px, faster than 1500px)
-            max_size = 1200
             original_size = input_image.size
+            
+            if hd_quality:
+                # HD: Minimal resize, maximum quality (for authenticated users)
+                max_size = 3000
+                compress_level = 3
+                logger.info(f"Processing in HD quality mode")
+            else:
+                # Standard: Balanced quality for free tier
+                max_size = 1200
+                compress_level = 5
             
             if max(input_image.size) > max_size:
                 ratio = max_size / max(input_image.size)
                 new_size = tuple(int(dim * ratio) for dim in input_image.size)
-                # BALANCED: Use LANCZOS for better quality (worth the small speed cost)
                 input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
                 logger.info(f"Resized from {original_size} to {input_image.size}")
             
             if session_rembg is None:
                 raise ValueError("Model not loaded")
             
-            # BALANCED: Keep alpha_matting disabled, but enable post_process_mask for better quality
+            # Process with quality settings
             output_image = remove(
                 input_image, 
                 session=session_rembg,
-                alpha_matting=False,
-                post_process_mask=True  # Better edge quality
+                alpha_matting=hd_quality,  # Enable for HD quality
+                post_process_mask=True
             )
             
             # Cleanup
             del input_image
             gc.collect()
             
-            # BALANCED: Compress level 5 (good quality, reasonable speed)
+            # Save with appropriate compression
             img_io = io.BytesIO()
-            output_image.save(img_io, 'PNG', optimize=True, compress_level=5)
+            output_image.save(img_io, 'PNG', optimize=True, compress_level=compress_level)
             img_io.seek(0)
             
             processing_time = time.time() - start_time
-            logger.info(f"Processed in {processing_time:.2f}s")
+            logger.info(f"Processed in {processing_time:.2f}s (HD: {hd_quality})")
             
             return img_io, processing_time
     except Exception as e:
@@ -284,11 +291,11 @@ def logout():
 
 @app.route('/upload', methods=['POST'])
 def upload_image():
-    """Upload and process image - AUTHENTICATION OPTIONAL"""
+    """Upload and process image - with authentication-based features"""
     try:
         # Check memory
         if check_memory_usage() > 90:
-            return jsonify({'error': 'Server under heavy load'}), 503
+            return jsonify({'error': 'Server under heavy load. Please try again later.'}), 503
         
         if 'image_file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400
@@ -299,7 +306,57 @@ def upload_image():
             return jsonify({'error': 'No file selected'}), 400
         
         if not allowed_file(file.filename):
-            return jsonify({'error': 'Invalid file type'}), 400
+            return jsonify({'error': 'Invalid file type. Please upload PNG, JPG, JPEG, GIF, or WEBP.'}), 400
+        
+        # Check file size
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        
+        # Check authentication status
+        user_id = session.get('user_id')
+        is_authenticated = user_id is not None
+        
+        # HD quality check
+        hd_quality = request.form.get('hd_quality', 'false').lower() == 'true'
+        
+        if hd_quality and not is_authenticated:
+            return jsonify({
+                'error': 'HD quality is only available for registered users. Please sign up to unlock HD quality!',
+                'requiresAuth': True
+            }), 403
+        
+        # File size limits
+        max_size_free = 5 * 1024 * 1024  # 5MB for free users
+        max_size_premium = 10 * 1024 * 1024  # 10MB for authenticated users
+        
+        if not is_authenticated and file_size > max_size_free:
+            return jsonify({
+                'error': f'File size ({file_size / (1024*1024):.1f}MB) exceeds the free tier limit of 5MB. Please sign up to upload files up to 10MB!',
+                'requiresAuth': True
+            }), 413
+        
+        if is_authenticated and file_size > max_size_premium:
+            return jsonify({
+                'error': f'File size ({file_size / (1024*1024):.1f}MB) exceeds the maximum limit of 10MB. Please reduce the file size.'
+            }), 413
+        
+        # Rate limiting for non-authenticated users
+        if not is_authenticated:
+            # Use IP-based rate limiting
+            client_ip = request.remote_addr
+            rate_limit_key = f"ratelimit_{client_ip}"
+            
+            # Check daily usage (stored in session for simplicity)
+            daily_count = session.get(rate_limit_key, 0)
+            if daily_count >= 5:
+                return jsonify({
+                    'error': 'Daily limit reached! Free users can process 5 images per day. Sign up for unlimited processing!',
+                    'requiresAuth': True
+                }), 429
+            
+            # Increment counter
+            session[rate_limit_key] = daily_count + 1
         
         # Save with unique filename
         unique_id = str(uuid.uuid4())[:8]
@@ -308,9 +365,9 @@ def upload_image():
         file.save(filepath)
         
         try:
-            # Process image
-            future = executor.submit(processed_images, filepath)
-            img_io, processing_time = future.result(timeout=30)
+            # Process image with quality setting
+            future = executor.submit(process_image, filepath, hd_quality)
+            img_io, processing_time = future.result(timeout=60 if hd_quality else 30)
             
             # Copy image bytes for Firebase upload (so we can send response immediately)
             img_io.seek(0)
