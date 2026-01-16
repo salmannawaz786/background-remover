@@ -361,7 +361,14 @@
 
         imageInput.addEventListener('change', (event) => {
             const files = Array.from(event.target.files);
-            handleFiles(files);
+            if (files.length > 0) {
+                handleFiles(files);
+            }
+        });
+        
+        // Fix: Reset input on click to allow re-uploading same file
+        imageInput.addEventListener('click', () => {
+            imageInput.value = '';
         });
 
         ['dragenter', 'dragover'].forEach(eventName => {

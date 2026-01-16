@@ -91,7 +91,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 # Resource monitoring
-MAX_MEMORY_PERCENT = 80
+MAX_MEMORY_PERCENT = 92
 memory_warning_issued = False
 
 # Thread pool - BALANCED for quality and speed
@@ -138,32 +138,40 @@ def process_image(image_path, hd_quality=False):
     start_time = time.time()
     
     try:
-        # Check memory
+        # Check memory - be more lenient, only block at critical levels
         mem_usage = check_memory_usage()
-        if mem_usage > 90:
-            raise MemoryError("Server under heavy load")
+        if mem_usage > 95:
+            gc.collect()  # Try to free memory first
+            mem_usage = check_memory_usage()
+            if mem_usage > 95:
+                raise MemoryError("Server is busy. Please try again in a moment.")
         
         with Image.open(image_path) as input_image:
             original_size = input_image.size
+            original_mode = input_image.mode
             
             if hd_quality:
-                # HD: Minimal resize, maximum quality (for authenticated users)
-                max_size = 3000
-                compress_level = 3
-                logger.info(f"Processing in HD quality mode")
+                # HD: NO resize, NO compression - keep original quality
+                # Only resize if image is extremely large (over 4000px)
+                max_size = 4000
+                compress_level = 0  # No compression
+                logger.info(f"Processing in HD quality mode - preserving original quality")
             else:
                 # Standard: Balanced quality for free tier
                 max_size = 1200
-                compress_level = 5
+                compress_level = 6
             
+            # Only resize if needed
             if max(input_image.size) > max_size:
                 ratio = max_size / max(input_image.size)
                 new_size = tuple(int(dim * ratio) for dim in input_image.size)
                 input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
                 logger.info(f"Resized from {original_size} to {input_image.size}")
+            else:
+                logger.info(f"Keeping original size: {original_size}")
             
             if session_rembg is None:
-                raise ValueError("Model not loaded")
+                raise ValueError("Processing model not ready. Please refresh and try again.")
             
             # Process with quality settings
             output_image = remove(
@@ -173,21 +181,32 @@ def process_image(image_path, hd_quality=False):
                 post_process_mask=True
             )
             
-            # Cleanup
+            # Cleanup input
             del input_image
-            gc.collect()
             
             # Save with appropriate compression
             img_io = io.BytesIO()
-            output_image.save(img_io, 'PNG', optimize=True, compress_level=compress_level)
+            if hd_quality:
+                # HD: Save without compression to preserve quality
+                output_image.save(img_io, 'PNG', compress_level=0)
+            else:
+                output_image.save(img_io, 'PNG', optimize=True, compress_level=compress_level)
             img_io.seek(0)
+            
+            # Cleanup output
+            del output_image
+            gc.collect()
             
             processing_time = time.time() - start_time
             logger.info(f"Processed in {processing_time:.2f}s (HD: {hd_quality})")
             
             return img_io, processing_time
+    except MemoryError as e:
+        gc.collect()
+        raise
     except Exception as e:
         logger.error(f"Processing error: {str(e)}")
+        gc.collect()
         raise
 
 # Cache processed images
@@ -396,18 +415,30 @@ def upload_image():
             
             return response
         except TimeoutError:
-            return jsonify({'error': 'Processing timeout'}), 504
+            return jsonify({'error': 'Processing took too long. Please try with a smaller image.'}), 504
+        except MemoryError as e:
+            gc.collect()
+            return jsonify({'error': str(e) or 'Server is busy. Please try again in a moment.'}), 503
         except Exception as e:
-            logger.error(f"Processing error: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+            error_msg = str(e)
+            logger.error(f"Processing error: {error_msg}")
+            # Provide user-friendly error messages
+            if 'model' in error_msg.lower():
+                return jsonify({'error': 'Processing model not ready. Please refresh and try again.'}), 503
+            return jsonify({'error': 'Failed to process image. Please try again.'}), 500
         finally:
-            # Cleanup
-            if os.path.exists(filepath):
-                os.remove(filepath)
+            # Cleanup uploaded file
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except:
+                pass
+            gc.collect()
     
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
+        gc.collect()
+        return jsonify({'error': 'Upload failed. Please try again.'}), 500
 
 @app.route('/health')
 def health():
