@@ -174,10 +174,11 @@ def process_image(image_path, hd_quality=False):
                 raise ValueError("Processing model not ready. Please refresh and try again.")
             
             # Process with quality settings
+            # Note: alpha_matting disabled as it can cause messy edges on some images
             output_image = remove(
                 input_image, 
                 session=session_rembg,
-                alpha_matting=hd_quality,  # Enable for HD quality
+                alpha_matting=False,
                 post_process_mask=True
             )
             
