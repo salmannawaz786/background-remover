@@ -75,8 +75,9 @@
       "icon": "assets/icon.png"
     },
     "publish": {
-      "provider": "generic",
-      "url": "https://updates.sallulabs.com"
+      "provider": "github",
+      "owner": "Johny111ishxb",
+      "repo": "background-remover"
     },
     "asar": true,
     "asarUnpack": [
