@@ -1,0 +1,88 @@
+{
+  "name": "bg-remover-desktop",
+  "version": "1.0.0",
+  "description": "Offline Background Remover Desktop App",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --expose-gc",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:linux": "electron-builder --linux --publish never",
+    "publish:win": "electron-builder --win --publish always",
+    "publish:mac": "electron-builder --mac --publish always",
+    "release": "electron-builder --win --mac --publish always"
+  },
+  "author": "SalluLabs",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "javascript-obfuscator": "^4.1.0"
+  },
+  "dependencies": {
+    "@imgly/background-removal-node": "^1.4.5",
+    "electron-updater": "^6.1.7",
+    "electron-store": "^8.1.0"
+  },
+  "build": {
+    "appId": "com.sallulabs.bgremover",
+    "productName": "BG Remover",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@imgly/background-removal-node/dist",
+        "to": "bg-removal-resources",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [{
+        "target": "nsis",
+        "arch": ["x64"]
+      }],
+      "icon": "assets/icon.ico",
+      "publisherName": "SalluLabs",
+      "verifyUpdateCodeSignature": false,
+      "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [{
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.graphics-design",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BG Remover"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://updates.sallulabs.com"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@imgly/background-removal-node/dist/resources/**/*"
+    ],
+    "compression": "maximum",
+    "afterPack": "./build-scripts/obfuscate.js"
+  }
+}

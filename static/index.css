@@ -198,12 +198,11 @@ body{
 
         .results-container {
             margin-top: 20px;
-            max-height: 600px;
-            overflow: hidden;
             padding: 10px;
             display: flex;
             flex-direction: column;
             align-items: center;
+            width: 100%;
         }
 
         .image-grid {
@@ -220,10 +219,84 @@ body{
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
+        .image-card-inner {
+            position: relative;
+            width: 100%;
+            height: 200px;
+        }
+
         .image-card img {
             width: 100%;
             height: 200px;
             object-fit: cover;
+        }
+
+        .image-card.processed {
+            border: 2px solid #28a745;
+        }
+
+        /* Loading overlay for batch processing */
+        .image-loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            z-index: 10;
+        }
+
+        .image-loading-overlay .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #facc15;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .image-loading-overlay span {
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .image-status {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            z-index: 5;
+        }
+
+        .status-success {
+            color: #28a745;
+            font-size: 24px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.9);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status-error {
+            color: #dc3545;
+            font-size: 24px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.9);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .remove-image {
@@ -239,17 +312,91 @@ body{
             cursor: pointer;
         }
 
-        #uploaded-image {
+        /* Before/After Comparison Container */
+        .comparison-container {
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        .comparison-wrapper {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .comparison-item {
+            flex: 1;
+            min-width: 280px;
+            max-width: 400px;
+            text-align: center;
+            position: relative;
+        }
+
+        .comparison-label {
+            display: block;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 10px;
+            padding: 6px 16px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .comparison-item:first-child .comparison-label {
+            background: linear-gradient(135deg, #6b7280, #4b5563);
+            color: white;
+        }
+
+        .comparison-item:last-child .comparison-label {
+            background: linear-gradient(135deg, #facc15, #f59e0b);
+            color: white;
+        }
+
+        .comparison-item img {
             max-width: 100%;
-            max-height: 600px;
+            max-height: 400px;
             width: auto;
             height: auto;
             object-fit: contain;
-            margin-top: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            background: repeating-conic-gradient(#e5e5e5 0% 25%, #fff 0% 50%) 50% / 20px 20px;
+        }
+
+        .comparison-item:last-child img {
+            background: repeating-conic-gradient(#e5e5e5 0% 25%, #fff 0% 50%) 50% / 20px 20px;
+        }
+
+        #uploaded-image, #original-image {
+            max-width: 100%;
+            max-height: 400px;
+            width: auto;
+            height: auto;
+            object-fit: contain;
             border-radius: 10px;
             display: block;
             margin-left: auto;
             margin-right: auto;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .comparison-wrapper {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .comparison-item {
+                max-width: 100%;
+                width: 100%;
+            }
+            
+            .comparison-item img {
+                max-height: 300px;
+            }
         }
 
         #download-button, .process-all-btn, .download-all-btn {
@@ -263,6 +410,84 @@ body{
             cursor: pointer;
             transition: background-color 0.3s;
             display: none;
+        }
+
+        /* Offline Download Section */
+        .offline-download-section {
+            margin-top: 40px;
+            padding: 25px;
+            background: linear-gradient(135deg, rgba(250, 204, 21, 0.1), rgba(245, 158, 11, 0.1));
+            border: 2px dashed rgba(250, 204, 21, 0.5);
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+            padding-top: 4rem;
+            padding-bottom: 4rem;
+        }
+
+        .offline-content h3 {
+            margin: 0 0 10px 0;
+            font-size:30px;
+            color: #333;
+        }
+
+        .offline-content p {
+            margin: 0 0 20px 0;
+            color: #666;
+            font-size: 18px;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .offline-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .offline-btn.windows-btn {
+            background: linear-gradient(135deg, #0078d4, #005a9e);
+            color: white;
+        }
+
+        .offline-btn.windows-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 120, 212, 0.4);
+        }
+
+        .offline-btn.mac-btn {
+            background: linear-gradient(135deg, #333, #1a1a1a);
+            color: white;
+        }
+
+        .offline-btn.mac-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Dark mode for offline section */
+        body.dark-mode .offline-download-section {
+            background: linear-gradient(135deg, rgba(250, 204, 21, 0.05), rgba(245, 158, 11, 0.05));
+            border-color: rgba(250, 204, 21, 0.3);
+        }
+
+        body.dark-mode .offline-content h3 {
+            color: #fff;
+        }
+
+        body.dark-mode .offline-content p {
+            color: #aaa;
         }
 
         .loader {
@@ -345,6 +570,34 @@ body{
         body.dark-mode .image-card {
             background-color: #2a2a2a;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Dark mode for comparison container */
+        body.dark-mode .comparison-item img {
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            background: repeating-conic-gradient(#333 0% 25%, #444 0% 50%) 50% / 20px 20px;
+        }
+
+        body.dark-mode .comparison-label {
+            color: white;
+        }
+
+        body.dark-mode .image-loading-overlay {
+            background: rgba(0, 0, 0, 0.85);
+        }
+
+        body.dark-mode .status-success,
+        body.dark-mode .status-error {
+            background: rgba(40, 40, 40, 0.95);
+        }
+
+        body.dark-mode .drop-area {
+            border-color: #555;
+            color: #ccc;
+        }
+
+        body.dark-mode .drop-area:hover {
+            border-color: #facc15;
         }
 
         /* Only apply yellow color to specific spans, not all */

@@ -100,7 +100,9 @@ max_workers = int(os.getenv('MAX_WORKERS', max(2, min(cpu_count, 8))))
 executor = ThreadPoolExecutor(max_workers=max_workers)
 logger.info(f"Initialized thread pool with {executor._max_workers} workers")
 
-# Load rembg model - BALANCED SETTINGS
+# Load rembg model - HIGH QUALITY SETTINGS
+# u2net_human_seg is best for people, isnet-general-use for general objects
+# Using u2net for best overall quality
 model_name = os.getenv('MODEL_NAME', 'u2net')
 try:
     session_rembg = new_session(model_name)
@@ -157,9 +159,9 @@ def process_image(image_path, hd_quality=False):
                 compress_level = 0  # No compression
                 logger.info(f"Processing in HD quality mode - preserving original quality")
             else:
-                # Standard: Balanced quality for free tier
-                max_size = 1200
-                compress_level = 6
+                # Standard: Better quality for free tier (increased from 1200)
+                max_size = 2000
+                compress_level = 3  # Less compression for better quality
             
             # Only resize if needed
             if max(input_image.size) > max_size:
@@ -174,11 +176,14 @@ def process_image(image_path, hd_quality=False):
                 raise ValueError("Processing model not ready. Please refresh and try again.")
             
             # Process with quality settings
-            # Note: alpha_matting disabled as it can cause messy edges on some images
+            # Optimized alpha_matting settings for clean edges
             output_image = remove(
                 input_image, 
                 session=session_rembg,
-                alpha_matting=False,
+                alpha_matting=True,
+                alpha_matting_foreground_threshold=270,
+                alpha_matting_background_threshold=20,
+                alpha_matting_erode_size=15,
                 post_process_mask=True
             )
             
@@ -313,9 +318,21 @@ def logout():
 def upload_image():
     """Upload and process image - with authentication-based features"""
     try:
-        # Check memory
-        if check_memory_usage() > 90:
-            return jsonify({'error': 'Server under heavy load. Please try again later.'}), 503
+        # Check memory with graceful degradation
+        mem_usage = check_memory_usage()
+        if mem_usage > 95:
+            # Critical - try to free memory first
+            gc.collect()
+            mem_usage = check_memory_usage()
+            if mem_usage > 95:
+                return jsonify({
+                    'error': 'Server is currently at capacity. Please wait a moment and try again.',
+                    'retryAfter': 10,
+                    'serverLoad': 'critical'
+                }), 503
+        elif mem_usage > 90:
+            # High load but still processing - warn user
+            logger.warning(f"High memory usage: {mem_usage}%. Processing with caution.")
         
         if 'image_file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400

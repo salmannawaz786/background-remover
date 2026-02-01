@@ -1,0 +1,90 @@
+<!-- Add this to index.html before closing </body> tag -->
+
+<!-- Update Notification -->
+<div id="update-notification" style="display: none; position: fixed; bottom: 20px; right: 20px; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%); color: #1a1a1a; padding: 20px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); max-width: 350px; z-index: 10000;">
+    <div style="display: flex; align-items: flex-start; gap: 15px;">
+        <div style="font-size: 32px;">🎉</div>
+        <div style="flex: 1;">
+            <h3 style="margin: 0 0 5px 0; font-size: 16px; font-weight: 700;">Update Available!</h3>
+            <p id="update-version" style="margin: 0 0 10px 0; font-size: 14px; opacity: 0.9;">Version <span></span> is ready to install</p>
+            <div style="display: flex; gap: 10px;">
+                <button id="download-update-btn" style="padding: 8px 16px; background: #1a1a1a; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">
+                    Download
+                </button>
+                <button id="dismiss-update-btn" style="padding: 8px 16px; background: rgba(0,0,0,0.2); color: #1a1a1a; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">
+                    Later
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Update Downloaded Notification -->
+<div id="update-downloaded-notification" style="display: none; position: fixed; bottom: 20px; right: 20px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); max-width: 350px; z-index: 10000;">
+    <div style="display: flex; align-items: flex-start; gap: 15px;">
+        <div style="font-size: 32px;">✅</div>
+        <div style="flex: 1;">
+            <h3 style="margin: 0 0 5px 0; font-size: 16px; font-weight: 700;">Update Ready!</h3>
+            <p style="margin: 0 0 10px 0; font-size: 14px; opacity: 0.9;">Restart to install the latest version</p>
+            <div style="display: flex; gap: 10px;">
+                <button id="install-update-btn" style="padding: 8px 16px; background: #fff; color: #059669; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">
+                    Restart Now
+                </button>
+                <button id="dismiss-downloaded-btn" style="padding: 8px 16px; background: rgba(255,255,255,0.2); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">
+                    Later
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Update notification handlers
+if (window.electronAPI) {
+    // Update available
+    window.electronAPI.onUpdateAvailable((info) => {
+        console.log('Update available:', info.version);
+        const notification = document.getElementById('update-notification');
+        const versionSpan = document.getElementById('update-version').querySelector('span');
+        versionSpan.textContent = info.version;
+        notification.style.display = 'block';
+    });
+
+    // Update downloaded
+    window.electronAPI.onUpdateDownloaded((info) => {
+        console.log('Update downloaded:', info.version);
+        document.getElementById('update-notification').style.display = 'none';
+        document.getElementById('update-downloaded-notification').style.display = 'block';
+    });
+
+    // Download update
+    document.getElementById('download-update-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('download-update-btn');
+        btn.textContent = 'Downloading...';
+        btn.disabled = true;
+        
+        const result = await window.electronAPI.downloadUpdate();
+        if (!result.success) {
+            btn.textContent = 'Failed';
+            setTimeout(() => {
+                btn.textContent = 'Download';
+                btn.disabled = false;
+            }, 2000);
+        }
+    });
+
+    // Install update
+    document.getElementById('install-update-btn').addEventListener('click', () => {
+        window.electronAPI.installUpdate();
+    });
+
+    // Dismiss notifications
+    document.getElementById('dismiss-update-btn').addEventListener('click', () => {
+        document.getElementById('update-notification').style.display = 'none';
+    });
+
+    document.getElementById('dismiss-downloaded-btn').addEventListener('click', () => {
+        document.getElementById('update-downloaded-notification').style.display = 'none';
+    });
+}
+</script>

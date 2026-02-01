@@ -1,0 +1,74 @@
+name: Build Electron App
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: 'bg remover desktop/package-lock.json'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: ./bg remover desktop
+
+      - name: Build Windows app
+        run: npm run build:win
+        working-directory: ./bg remover desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BG-Remover-Windows
+          path: |
+            ./bg remover desktop/dist/*.exe
+            ./bg remover desktop/dist/*.exe.blockmap
+          retention-days: 30
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: 'bg remover desktop/package-lock.json'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: ./bg remover desktop
+
+      - name: Build macOS app
+        run: npm run build:mac
+        working-directory: ./bg remover desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BG-Remover-macOS
+          path: |
+            ./bg remover desktop/dist/*.dmg
+            ./bg remover desktop/dist/*.dmg.blockmap
+          retention-days: 30

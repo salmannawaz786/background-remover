@@ -181,7 +181,19 @@
 
             <div class="results-container">
                 <div class="image-grid" id="image-grid"></div>
-                <img id="uploaded-image" src="" alt="Processed Image" style="display:none;"/>
+                <!-- Before/After Comparison for Single Image -->
+                <div class="comparison-container" id="comparison-container" style="display:none;">
+                    <div class="comparison-wrapper">
+                        <div class="comparison-item">
+                            <span class="comparison-label">Before</span>
+                            <img id="original-image" src="" alt="Original Image"/>
+                        </div>
+                        <div class="comparison-item">
+                            <span class="comparison-label">After</span>
+                            <img id="uploaded-image" src="" alt="Processed Image"/>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <button id="download-button">
@@ -194,12 +206,35 @@
             <button class="process-all-btn" id="process-all-btn">Process All Images</button>
             <button class="download-all-btn" id="download-all-btn">Download All</button>
 
+            <!-- Offline Version Download Section -->
+           
+
             <div class="loader" id="loader">
                 <dotlottie-player src="/static/dogie_running.lottie" background="transparent" speed="1" style="width: 200px; height: 200px;" loop autoplay></dotlottie-player>
             </div>
             <div id="success-notification">Background removed successfully!</div>
         </div>
     </div>
+     <div class="offline-download-section">
+                <div class="offline-content">
+                    <h3>🖥️ Want to try the offline version?</h3>
+                    <p>Download our desktop app for faster processing without internet!</p>
+                    <div class="download-buttons">
+                        <a href="#" class="offline-btn windows-btn" id="download-windows">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
+                            </svg>
+                            Windows
+                        </a>
+                        <a href="#" class="offline-btn mac-btn" id="download-mac">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                            </svg>
+                            macOS
+                        </a>
+                    </div>
+                </div>
+            </div>
 <footer>
         <div class="footer-container">
           <div class="footer-content">
@@ -315,6 +350,8 @@
         const imageInput = document.getElementById('image-input');
         const uploadButton = document.getElementById('upload-button');
         const uploadedImage = document.getElementById('uploaded-image');
+        const originalImage = document.getElementById('original-image');
+        const comparisonContainer = document.getElementById('comparison-container');
         const downloadButton = document.getElementById('download-button');
         const dropArea = document.getElementById('drop-area');
         const loader = document.getElementById('loader');
@@ -350,6 +387,8 @@
         function clearImages() {
             imageGrid.innerHTML = '';
             uploadedImage.style.display = 'none';
+            if (originalImage) originalImage.style.display = 'none';
+            if (comparisonContainer) comparisonContainer.style.display = 'none';
             uploadedFiles = [];
             processedImages = [];
             uploadButton.style.display = 'block';
@@ -418,9 +457,16 @@
 
         async function processImage(file) {
             if (file) {
+                // Clear previous results before processing new image
+                if (comparisonContainer) comparisonContainer.style.display = 'none';
+                downloadButton.style.display = 'none';
+                
                 loader.style.display = 'block';
                 uploadButton.style.display = 'none';
                 dropArea.style.display = 'none';
+
+                // Store original image for before/after comparison
+                const originalURL = URL.createObjectURL(file);
 
                 const formData = new FormData();
                 formData.append('image_file', file);
@@ -439,8 +485,10 @@
                         const blob = await response.blob();
                         const objectURL = URL.createObjectURL(blob);
 
+                        // Show before/after comparison
+                        originalImage.src = originalURL;
                         uploadedImage.src = objectURL;
-                        uploadedImage.style.display = 'block';
+                        comparisonContainer.style.display = 'block';
                         downloadButton.style.display = 'block';
 
                         successNotification.style.display = 'block';
@@ -485,10 +533,18 @@
             const reader = new FileReader();
             const card = document.createElement('div');
             card.className = 'image-card';
+            card.dataset.fileIndex = uploadedFiles.indexOf(file);
             
             reader.onload = (e) => {
                 card.innerHTML = `
-                    <img src="${e.target.result}" alt="Preview">
+                    <div class="image-card-inner">
+                        <img src="${e.target.result}" alt="Preview" class="original-preview">
+                        <div class="image-loading-overlay" style="display:none;">
+                            <div class="spinner"></div>
+                            <span>Processing...</span>
+                        </div>
+                        <div class="image-status"></div>
+                    </div>
                     <button class="remove-image">&times;</button>
                 `;
                 imageGrid.appendChild(card);
@@ -512,11 +568,23 @@
         }
 
         processAllBtn.addEventListener('click', async () => {
-            loader.style.display = 'block';
+            // Hide Lottie loader for batch mode - use individual overlays instead
             processAllBtn.disabled = true;
+            processAllBtn.textContent = 'Processing...';
             processedImages = [];
             
-            for (const file of uploadedFiles) {
+            const imageCards = imageGrid.querySelectorAll('.image-card');
+            
+            for (let i = 0; i < uploadedFiles.length; i++) {
+                const file = uploadedFiles[i];
+                const card = imageCards[i];
+                const overlay = card?.querySelector('.image-loading-overlay');
+                const statusEl = card?.querySelector('.image-status');
+                
+                // Show loading overlay on this specific image
+                if (overlay) overlay.style.display = 'flex';
+                if (statusEl) statusEl.textContent = '';
+                
                 const formData = new FormData();
                 formData.append('image_file', file);
                 
@@ -531,19 +599,28 @@
                         processedImages.push(blob);
                         
                         const objectURL = URL.createObjectURL(blob);
-                        const index = uploadedFiles.indexOf(file);
-                        const imageCards = imageGrid.querySelectorAll('.image-card');
-                        if (imageCards[index]) {
-                            imageCards[index].querySelector('img').src = objectURL;
+                        if (card) {
+                            card.querySelector('img').src = objectURL;
+                            card.classList.add('processed');
+                            if (statusEl) statusEl.innerHTML = '<span class="status-success">✓</span>';
                         }
+                    } else {
+                        processedImages.push(null);
+                        if (statusEl) statusEl.innerHTML = '<span class="status-error">✗</span>';
                     }
                 } catch (error) {
                     console.error('Error processing image:', error);
+                    processedImages.push(null);
+                    if (statusEl) statusEl.innerHTML = '<span class="status-error">✗</span>';
+                } finally {
+                    // Hide loading overlay for this image
+                    if (overlay) overlay.style.display = 'none';
                 }
             }
             
-            loader.style.display = 'none';
             processAllBtn.style.display = 'none';
+            processAllBtn.disabled = false;
+            processAllBtn.textContent = 'Process All Images';
             downloadAllBtn.style.display = 'block';
             successNotification.style.display = 'block';
             setTimeout(() => {
