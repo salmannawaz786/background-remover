@@ -42,7 +42,9 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js')
         },
-        icon: path.join(__dirname, 'assets', 'icon.png'),
+        icon: process.platform === 'win32' 
+            ? path.join(__dirname, 'assets', 'icon.ico')
+            : path.join(__dirname, 'assets', 'icon.png'),
         titleBarStyle: 'hiddenInset',
         backgroundColor: '#1a1a1a'
     });
