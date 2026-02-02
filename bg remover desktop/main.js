@@ -46,8 +46,12 @@ function createWindow() {
             ? path.join(__dirname, 'assets', 'icon.ico')
             : path.join(__dirname, 'assets', 'icon.png'),
         titleBarStyle: 'hiddenInset',
-        backgroundColor: '#1a1a1a'
+        backgroundColor: '#1a1a1a',
+        autoHideMenuBar: true
     });
+    
+    // Hide menu bar completely (File, Edit, View, Window, Help)
+    mainWindow.setMenu(null);
 
     // Check if user needs authentication first
     mainWindow.loadFile('auth.html');
@@ -84,12 +88,19 @@ app.whenReady().then(() => {
 });
 
 // Auto-updater configuration
-autoUpdater.autoDownload = false;
+autoUpdater.autoDownload = true;  // Auto-download updates
 autoUpdater.autoInstallOnAppQuit = true;
 
 function checkForUpdates() {
-    autoUpdater.checkForUpdates();
+    console.log('Checking for updates...');
+    autoUpdater.checkForUpdates().catch(err => {
+        console.error('Update check failed:', err);
+    });
 }
+
+autoUpdater.on('checking-for-update', () => {
+    console.log('Checking for update...');
+});
 
 autoUpdater.on('update-available', (info) => {
     console.log('Update available:', info.version);
@@ -98,10 +109,31 @@ autoUpdater.on('update-available', (info) => {
     }
 });
 
+autoUpdater.on('update-not-available', (info) => {
+    console.log('No updates available. Current version:', info.version);
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+    console.log(`Download progress: ${progressObj.percent.toFixed(1)}%`);
+});
+
 autoUpdater.on('update-downloaded', (info) => {
     console.log('Update downloaded:', info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('update-downloaded', info);
+        // Show dialog to user
+        const { dialog } = require('electron');
+        dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: 'Update Ready',
+            message: `Version ${info.version} has been downloaded.`,
+            detail: 'The update will be installed when you restart the app.',
+            buttons: ['Restart Now', 'Later']
+        }).then(result => {
+            if (result.response === 0) {
+                autoUpdater.quitAndInstall();
+            }
+        });
     }
 });
 
