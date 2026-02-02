@@ -58,10 +58,8 @@
       }],
       "icon": "assets/icon.icns",
       "category": "public.app-category.graphics-design",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
     },
     "nsis": {
       "oneClick": false,
@@ -81,7 +79,8 @@
     },
     "asar": true,
     "asarUnpack": [
-      "node_modules/@imgly/background-removal-node/dist/resources/**/*"
+      "node_modules/@imgly/background-removal-node/**/*",
+      "node_modules/sharp/**/*"
     ],
     "compression": "maximum",
     "afterPack": "./build-scripts/obfuscate.js"
