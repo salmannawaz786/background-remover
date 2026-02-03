@@ -14,12 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removeBackground: (imageData) => ipcRenderer.invoke('remove-background', imageData),
     onProgress: (callback) => ipcRenderer.on('processing-progress', (event, data) => callback(data)),
     
-    // Cloudflare R2 Storage APIs
-    r2: {
-        getConfig: () => ipcRenderer.invoke('get-r2-config'),
-        saveConfig: (config) => ipcRenderer.invoke('save-r2-config', config),
-        upload: (imageData, fileName) => ipcRenderer.invoke('upload-to-r2', { imageData, fileName })
-    },
+    // Cloudflare R2 Storage
+    uploadToR2: (imageData, filename) => ipcRenderer.invoke('upload-to-r2', { imageData, filename }),
     
     // Authentication APIs
     auth: {

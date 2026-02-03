@@ -1,10 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const Store = require('electron-store');
 const { setupAuthHandlers, getCurrentUser, setCurrentUser } = require('./auth');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
 // Initialize persistent store
 const store = new Store({
@@ -33,6 +32,11 @@ process.on('unhandledRejection', (error) => {
 });
 
 function createWindow() {
+    // Hide menu bar on Windows/Linux
+    if (process.platform !== 'darwin') {
+        Menu.setApplicationMenu(null);
+    }
+    
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
@@ -45,18 +49,12 @@ function createWindow() {
         },
         icon: process.platform === 'win32' 
             ? path.join(__dirname, 'assets', 'icon.ico')
-            : path.join(__dirname, 'assets', 'icon.png'),
-        titleBarStyle: 'hiddenInset',
-        backgroundColor: '#1a1a1a',
+            : path.join(__dirname, 'assets', 'icon.icns'),
         autoHideMenuBar: true,
-        frame: true
+        frame: true,
+        titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+        backgroundColor: '#1a1a1a'
     });
-    
-    // Hide menu bar completely on Windows
-    if (process.platform === 'win32') {
-        mainWindow.setMenuBarVisibility(false);
-        mainWindow.setMenu(null);
-    }
 
     // Check if user needs authentication first
     mainWindow.loadFile('auth.html');
@@ -93,20 +91,26 @@ app.whenReady().then(() => {
 });
 
 // Auto-updater configuration
-autoUpdater.autoDownload = true;  // Auto-download updates
+autoUpdater.autoDownload = true;  // Automatically download updates
 autoUpdater.autoInstallOnAppQuit = true;
 autoUpdater.allowDowngrade = false;
 
+// Set GitHub as update source
+autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'Johny111ishxb',
+    repo: 'background-remover'
+});
+
 function checkForUpdates() {
     console.log('🔍 Checking for updates...');
-    console.log('Current version:', app.getVersion());
     autoUpdater.checkForUpdatesAndNotify().catch(err => {
         console.error('Update check failed:', err);
     });
 }
 
 autoUpdater.on('checking-for-update', () => {
-    console.log('🔍 Checking for update...');
+    console.log('🔍 Checking for updates...');
 });
 
 autoUpdater.on('update-available', (info) => {
@@ -117,13 +121,13 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('update-not-available', (info) => {
-    console.log('ℹ️ No update available. Current version is latest:', info.version);
+    console.log('✓ App is up to date:', info.version);
 });
 
-autoUpdater.on('download-progress', (progressObj) => {
-    console.log(`📥 Download progress: ${progressObj.percent.toFixed(1)}%`);
+autoUpdater.on('download-progress', (progress) => {
+    console.log(`⬇️ Download progress: ${Math.round(progress.percent)}%`);
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('update-download-progress', progressObj);
+        mainWindow.webContents.send('update-download-progress', progress);
     }
 });
 
@@ -153,99 +157,78 @@ ipcMain.handle('install-update', () => {
     autoUpdater.quitAndInstall();
 });
 
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
-});
+// Cloudflare R2 Configuration (stored securely - replace with your values)
+const R2_CONFIG = {
+    endpoint: process.env.R2_ENDPOINT || 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
+    accessKeyId: process.env.R2_ACCESS_KEY || 'YOUR_R2_ACCESS_KEY',
+    secretAccessKey: process.env.R2_SECRET_KEY || 'YOUR_R2_SECRET_KEY',
+    bucketName: process.env.R2_BUCKET_NAME || 'bg-remover-images',
+    publicDomain: process.env.R2_PUBLIC_DOMAIN || ''
+};
 
-// Cloudflare R2 Configuration (loaded from store or environment)
-function getR2Client() {
-    const r2Config = store.get('r2Config') || {};
-    if (!r2Config.endpoint || !r2Config.accessKey || !r2Config.secretKey) {
-        return null;
-    }
-    return new S3Client({
-        region: 'auto',
-        endpoint: r2Config.endpoint,
-        credentials: {
-            accessKeyId: r2Config.accessKey,
-            secretAccessKey: r2Config.secretKey
-        }
-    });
-}
-
-// IPC handler to save R2 configuration
-ipcMain.handle('save-r2-config', async (event, config) => {
+// R2 upload handler
+ipcMain.handle('upload-to-r2', async (event, { imageData, filename }) => {
     try {
-        store.set('r2Config', {
-            endpoint: config.endpoint,
-            accessKey: config.accessKey,
-            secretKey: config.secretKey,
-            bucketName: config.bucketName,
-            publicUrl: config.publicUrl || ''
-        });
-        return { success: true };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
-// IPC handler to get R2 configuration
-ipcMain.handle('get-r2-config', async () => {
-    const config = store.get('r2Config') || {};
-    return {
-        configured: !!(config.endpoint && config.accessKey && config.secretKey && config.bucketName),
-        endpoint: config.endpoint || '',
-        bucketName: config.bucketName || '',
-        publicUrl: config.publicUrl || ''
-    };
-});
-
-// IPC handler to upload processed image to R2
-ipcMain.handle('upload-to-r2', async (event, { imageData, fileName }) => {
-    try {
-        const r2Config = store.get('r2Config');
-        if (!r2Config || !r2Config.endpoint || !r2Config.accessKey || !r2Config.secretKey || !r2Config.bucketName) {
+        // Check if R2 is configured
+        if (R2_CONFIG.accessKeyId === 'YOUR_R2_ACCESS_KEY') {
+            console.log('⚠️ R2 not configured - skipping upload');
             return { success: false, error: 'R2 not configured' };
         }
-
+        
+        // Dynamic import for AWS SDK
+        const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+        
+        // Initialize S3 client for R2
         const s3Client = new S3Client({
             region: 'auto',
-            endpoint: r2Config.endpoint,
+            endpoint: R2_CONFIG.endpoint,
             credentials: {
-                accessKeyId: r2Config.accessKey,
-                secretAccessKey: r2Config.secretKey
+                accessKeyId: R2_CONFIG.accessKeyId,
+                secretAccessKey: R2_CONFIG.secretAccessKey
             }
         });
-
-        // Convert base64 to buffer
-        const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
         
-        // Generate unique filename
-        const timestamp = Date.now();
-        const uniqueFileName = `bg-removed/${timestamp}_${fileName}`;
-
+        // Convert blob/base64 to buffer
+        let buffer;
+        if (typeof imageData === 'string' && imageData.startsWith('data:')) {
+            const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+            buffer = Buffer.from(base64Data, 'base64');
+        } else if (imageData instanceof ArrayBuffer) {
+            buffer = Buffer.from(imageData);
+        } else {
+            buffer = Buffer.from(await imageData.arrayBuffer());
+        }
+        
+        // Upload to R2
         const command = new PutObjectCommand({
-            Bucket: r2Config.bucketName,
-            Key: uniqueFileName,
+            Bucket: R2_CONFIG.bucketName,
+            Key: filename,
             Body: buffer,
             ContentType: 'image/png'
         });
-
+        
         await s3Client.send(command);
         
         // Generate public URL
-        const publicUrl = r2Config.publicUrl 
-            ? `${r2Config.publicUrl}/${uniqueFileName}`
-            : `https://${r2Config.bucketName}.r2.dev/${uniqueFileName}`;
-
-        console.log('✅ Image uploaded to R2:', publicUrl);
-        return { success: true, url: publicUrl, key: uniqueFileName };
+        let publicUrl;
+        if (R2_CONFIG.publicDomain) {
+            publicUrl = `${R2_CONFIG.publicDomain}/${filename}`;
+        } else {
+            publicUrl = `https://${R2_CONFIG.bucketName}.r2.dev/${filename}`;
+        }
+        
+        console.log('✅ R2 upload success:', publicUrl);
+        return { success: true, url: publicUrl };
+        
     } catch (error) {
-        console.error('❌ R2 upload error:', error);
+        console.error('❌ R2 upload error:', error.message);
         return { success: false, error: error.message };
+    }
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+        app.quit();
     }
 });
 

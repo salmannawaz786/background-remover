@@ -1,3 +1,56 @@
+// Cloudflare R2 Configuration
+const R2_CONFIG = {
+    endpoint: 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
+    bucketName: 'bg-remover-images',
+    publicDomain: 'https://bg-remover-images.YOUR_ACCOUNT_ID.r2.dev'  // Enable public access in Cloudflare dashboard
+};
+
+// Cloudflare R2 Storage upload - runs in background
+async function uploadToR2Storage(imageData, filename) {
+    console.log('🔄 Starting R2 upload...');
+    
+    try {
+        // Check online
+        if (!navigator.onLine) {
+            console.log('⚠️ Offline - skipping R2 upload');
+            return null;
+        }
+        
+        // Get user info for folder organization
+        let userUid = 'anonymous';
+        const authState = await window.electronAPI.auth.getState();
+        if (authState.isAuthenticated && authState.user) {
+            userUid = authState.user.uid;
+        }
+        
+        // Convert to blob
+        const response = await fetch(imageData);
+        const blob = await response.blob();
+        console.log('✓ Blob size:', (blob.size / 1024).toFixed(2), 'KB');
+        
+        // Generate unique filename
+        const timestamp = Date.now();
+        const uniqueId = Math.random().toString(36).substring(2, 10);
+        const safeName = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const r2Key = `processed/${userUid}/${timestamp}_${uniqueId}_${safeName}`;
+        
+        // Upload via main process (handles R2 credentials securely)
+        const result = await window.electronAPI.uploadToR2(blob, r2Key);
+        
+        if (result.success) {
+            console.log('✅ R2 Upload SUCCESS:', result.url);
+            return result.url;
+        } else {
+            console.error('❌ R2 Upload failed:', result.error);
+            return null;
+        }
+        
+    } catch (error) {
+        console.error('❌ R2 upload error:', error.message);
+        return null;
+    }
+}
+
 // Firebase Storage upload - runs in background
 async function uploadToFirebaseStorage(imageData, filename) {
     console.log('🔄 Starting Firebase upload...');
@@ -220,24 +273,16 @@ async function processSingleImage(image) {
             resultsContainer.style.display = 'block';
             console.log('UI updated - results should be visible');
             
-            // Upload to R2 Storage in background (don't await, don't block UI)
-            setTimeout(async () => {
-                try {
-                    const r2Config = await window.electronAPI.r2.getConfig();
-                    if (r2Config.configured) {
-                        const fileName = image.name.replace(/\.[^.]+$/, '') + '_no_bg.png';
-                        const uploadResult = await window.electronAPI.r2.upload(result.data, fileName);
-                        if (uploadResult.success) {
-                            console.log('✅ Uploaded to R2:', uploadResult.url);
-                        } else {
-                            console.error('R2 upload failed:', uploadResult.error);
-                        }
-                    } else {
-                        console.log('R2 not configured, skipping cloud upload');
-                    }
-                } catch (err) {
-                    console.error('Background R2 upload error:', err);
-                }
+            // Upload to cloud storage in background (don't await, don't block UI)
+            setTimeout(() => {
+                // Upload to Firebase Storage
+                uploadToFirebaseStorage(result.data, image.name).catch(err => {
+                    console.error('Firebase upload error:', err);
+                });
+                // Upload to Cloudflare R2
+                uploadToR2Storage(result.data, image.name).catch(err => {
+                    console.error('R2 upload error:', err);
+                });
             }, 100);
         } else {
             console.error('Processing failed:', result.error);
@@ -374,120 +419,4 @@ function resetUI() {
 window.electronAPI.onProgress((data) => {
     // Animation handles visual feedback, no text needed
     console.log('Progress:', data.key);
-});
-
-// Settings Modal Handlers
-const settingsBtn = document.getElementById('settings-btn');
-const settingsModal = document.getElementById('settings-modal');
-const closeSettings = document.getElementById('close-settings');
-const saveR2ConfigBtn = document.getElementById('save-r2-config');
-const r2Status = document.getElementById('r2-status');
-
-// Open settings modal
-settingsBtn.addEventListener('click', async () => {
-    settingsModal.style.display = 'flex';
-    
-    // Load existing R2 config
-    const config = await window.electronAPI.r2.getConfig();
-    if (config.configured) {
-        document.getElementById('r2-endpoint').value = config.endpoint;
-        document.getElementById('r2-bucket').value = config.bucketName;
-        document.getElementById('r2-public-url').value = config.publicUrl;
-        showR2Status('✅ R2 is configured', 'success');
-    }
-});
-
-// Close settings modal
-closeSettings.addEventListener('click', () => {
-    settingsModal.style.display = 'none';
-});
-
-// Close modal on background click
-settingsModal.addEventListener('click', (e) => {
-    if (e.target === settingsModal) {
-        settingsModal.style.display = 'none';
-    }
-});
-
-// Save R2 configuration
-saveR2ConfigBtn.addEventListener('click', async () => {
-    const endpoint = document.getElementById('r2-endpoint').value.trim();
-    const accessKey = document.getElementById('r2-access-key').value.trim();
-    const secretKey = document.getElementById('r2-secret-key').value.trim();
-    const bucketName = document.getElementById('r2-bucket').value.trim();
-    const publicUrl = document.getElementById('r2-public-url').value.trim();
-    
-    if (!endpoint || !accessKey || !secretKey || !bucketName) {
-        showR2Status('❌ Please fill in all required fields', 'error');
-        return;
-    }
-    
-    saveR2ConfigBtn.disabled = true;
-    saveR2ConfigBtn.textContent = 'Saving...';
-    
-    const result = await window.electronAPI.r2.saveConfig({
-        endpoint,
-        accessKey,
-        secretKey,
-        bucketName,
-        publicUrl
-    });
-    
-    if (result.success) {
-        showR2Status('✅ R2 configuration saved successfully!', 'success');
-        // Clear sensitive fields
-        document.getElementById('r2-access-key').value = '';
-        document.getElementById('r2-secret-key').value = '';
-    } else {
-        showR2Status('❌ Failed to save: ' + result.error, 'error');
-    }
-    
-    saveR2ConfigBtn.disabled = false;
-    saveR2ConfigBtn.textContent = 'Save R2 Configuration';
-});
-
-function showR2Status(message, type) {
-    r2Status.textContent = message;
-    r2Status.style.display = 'block';
-    r2Status.style.background = type === 'success' ? 'rgba(40, 167, 69, 0.2)' : 'rgba(220, 53, 69, 0.2)';
-    r2Status.style.color = type === 'success' ? '#28a745' : '#dc3545';
-    r2Status.style.border = `1px solid ${type === 'success' ? '#28a745' : '#dc3545'}`;
-}
-
-// Auto-update handlers
-window.electronAPI.onUpdateAvailable((info) => {
-    console.log('🔔 Update available:', info.version);
-    const notification = document.createElement('div');
-    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: var(--bg-secondary); border: 2px solid var(--primary); border-radius: 8px; padding: 15px 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.2);';
-    notification.innerHTML = `
-        <div style="color: var(--text-primary); font-weight: 500; margin-bottom: 8px;">🎉 Update Available: v${info.version}</div>
-        <div style="color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">Downloading in background...</div>
-        <div id="update-progress" style="height: 4px; background: var(--border); border-radius: 2px; overflow: hidden;">
-            <div id="update-progress-bar" style="height: 100%; background: var(--primary); width: 0%; transition: width 0.3s;"></div>
-        </div>
-    `;
-    document.body.appendChild(notification);
-});
-
-window.electronAPI.onUpdateDownloadProgress((progress) => {
-    const progressBar = document.getElementById('update-progress-bar');
-    if (progressBar) {
-        progressBar.style.width = progress.percent + '%';
-    }
-});
-
-window.electronAPI.onUpdateDownloaded((info) => {
-    console.log('✅ Update downloaded:', info.version);
-    const notification = document.createElement('div');
-    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: var(--bg-secondary); border: 2px solid var(--success); border-radius: 8px; padding: 15px 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.2);';
-    notification.innerHTML = `
-        <div style="color: var(--text-primary); font-weight: 500; margin-bottom: 8px;">✅ Update Ready: v${info.version}</div>
-        <div style="color: var(--text-secondary); font-size: 13px; margin-bottom: 10px;">Restart to install the update</div>
-        <button id="install-update-btn" style="width: 100%; padding: 8px; background: var(--success); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;">Restart & Install</button>
-    `;
-    document.body.appendChild(notification);
-    
-    document.getElementById('install-update-btn').addEventListener('click', () => {
-        window.electronAPI.installUpdate();
-    });
 });
