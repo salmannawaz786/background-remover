@@ -21,9 +21,10 @@
     "javascript-obfuscator": "^4.1.0"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.981.0",
     "@imgly/background-removal-node": "^1.4.5",
-    "electron-updater": "^6.1.7",
-    "electron-store": "^8.1.0"
+    "electron-store": "^8.1.0",
+    "electron-updater": "^6.1.7"
   },
   "build": {
     "appId": "com.sallulabs.bgremover",
@@ -38,24 +39,35 @@
       {
         "from": "node_modules/@imgly/background-removal-node/dist",
         "to": "bg-removal-resources",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": [{
-        "target": "nsis",
-        "arch": ["x64"]
-      }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico",
       "publisherName": "SalluLabs",
       "verifyUpdateCodeSignature": false,
       "signAndEditExecutable": false
     },
     "mac": {
-      "target": [{
-        "target": "dmg",
-        "arch": ["x64", "arm64"]
-      }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
       "icon": "assets/icon.icns",
       "category": "public.app-category.graphics-design",
       "hardenedRuntime": false,
