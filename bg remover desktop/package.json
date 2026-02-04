@@ -1,6 +1,6 @@
 {
   "name": "bg-remover-desktop",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Offline Background Remover Desktop App",
   "main": "main.js",
   "scripts": {
@@ -40,13 +40,6 @@
       {
         "from": "node_modules/@imgly/background-removal-node/dist",
         "to": "bg-removal-resources",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "assets",
-        "to": "assets",
         "filter": [
           "**/*"
         ]
