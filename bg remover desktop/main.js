@@ -48,8 +48,8 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js')
         },
         icon: process.platform === 'win32' 
-            ? path.join(__dirname, 'assets', 'icon.ico')
-            : path.join(__dirname, 'assets', 'icon.icns'),
+            ? path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'icon.ico')
+            : path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'icon.icns'),
         autoHideMenuBar: true,
         frame: true,
         titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -159,10 +159,10 @@ ipcMain.handle('install-update', () => {
 
 // Cloudflare R2 Configuration (stored securely - replace with your values)
 const R2_CONFIG = {
-    endpoint: process.env.R2_ENDPOINT || 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
-    accessKeyId: process.env.R2_ACCESS_KEY || 'YOUR_R2_ACCESS_KEY',
-    secretAccessKey: process.env.R2_SECRET_KEY || 'YOUR_R2_SECRET_KEY',
-    bucketName: process.env.R2_BUCKET_NAME || 'bg-remover-images',
+    endpoint: process.env.R2_ENDPOINT || 'https://6985a0a8491427aee57107f93794a7fa.r2.cloudflarestorage.com',
+    accessKeyId: process.env.R2_ACCESS_KEY || 'a45b9c58b21460d9f58ee072d46dddba',
+    secretAccessKey: process.env.R2_SECRET_KEY || 'ae17604ead6b2eb5a253812227c9ac48d86706e3790a61f372e86fdc50a82f3e',
+    bucketName: process.env.R2_BUCKET_NAME || 'sallulabs-images',
     publicDomain: process.env.R2_PUBLIC_DOMAIN || ''
 };
 
