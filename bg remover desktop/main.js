@@ -47,9 +47,7 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js')
         },
-        icon: process.platform === 'win32' 
-            ? path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'icon.ico')
-            : path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'icon.icns'),
+        icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
         autoHideMenuBar: true,
         frame: true,
         titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',

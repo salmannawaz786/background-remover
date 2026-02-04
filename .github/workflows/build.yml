@@ -31,6 +31,12 @@ jobs:
         run: npm install
         working-directory: "./bg remover desktop"
 
+      - name: Rebuild native modules for Electron
+        run: |
+          npm install -g @electron/rebuild
+          npx @electron/rebuild
+        working-directory: "./bg remover desktop"
+
       - name: Build Windows app
         run: npm run build:win
         working-directory: "./bg remover desktop"
@@ -61,6 +67,12 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+        working-directory: "./bg remover desktop"
+
+      - name: Rebuild native modules for Electron
+        run: |
+          npm install -g @electron/rebuild
+          npx @electron/rebuild
         working-directory: "./bg remover desktop"
 
       - name: Build macOS app
