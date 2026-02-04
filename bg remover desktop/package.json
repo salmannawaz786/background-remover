@@ -1,6 +1,6 @@
 {
   "name": "bg-remover-desktop",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Offline Background Remover Desktop App",
   "main": "main.js",
   "scripts": {
