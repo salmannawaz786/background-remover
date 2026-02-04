@@ -1,6 +1,6 @@
 {
   "name": "bg-remover-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Offline Background Remover Desktop App",
   "main": "main.js",
   "scripts": {
@@ -74,6 +74,13 @@
             "x64",
             "arm64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "icon": "assets/icon.icns",
@@ -97,13 +104,7 @@
       "owner": "Johny111ishxb",
       "repo": "background-remover"
     },
-    "asar": true,
-    "asarUnpack": [
-      "node_modules/@imgly/background-removal-node/**/*",
-      "node_modules/sharp/**/*",
-      "node_modules/**/*.node",
-      "node_modules/**/vendor/**/*"
-    ],
+    "asar": false,
     "compression": "maximum",
     "afterPack": "./build-scripts/obfuscate.js"
   }

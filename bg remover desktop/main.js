@@ -12,6 +12,10 @@ const store = new Store({
 
 let mainWindow;
 
+if (process.platform === 'win32') {
+    app.setAppUserModelId('com.sallulabs.bgremover');
+}
+
 // Enable GPU acceleration and improve stability
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
@@ -157,10 +161,10 @@ ipcMain.handle('install-update', () => {
 
 // Cloudflare R2 Configuration (stored securely - replace with your values)
 const R2_CONFIG = {
-    endpoint: process.env.R2_ENDPOINT || 'https://6985a0a8491427aee57107f93794a7fa.r2.cloudflarestorage.com',
-    accessKeyId: process.env.R2_ACCESS_KEY || 'a45b9c58b21460d9f58ee072d46dddba',
-    secretAccessKey: process.env.R2_SECRET_KEY || 'ae17604ead6b2eb5a253812227c9ac48d86706e3790a61f372e86fdc50a82f3e',
-    bucketName: process.env.R2_BUCKET_NAME || 'sallulabs-images',
+    endpoint: process.env.R2_ENDPOINT || '',
+    accessKeyId: process.env.R2_ACCESS_KEY || '',
+    secretAccessKey: process.env.R2_SECRET_KEY || '',
+    bucketName: process.env.R2_BUCKET_NAME || '',
     publicDomain: process.env.R2_PUBLIC_DOMAIN || ''
 };
 
@@ -168,7 +172,7 @@ const R2_CONFIG = {
 ipcMain.handle('upload-to-r2', async (event, { imageData, filename }) => {
     try {
         // Check if R2 is configured
-        if (R2_CONFIG.accessKeyId === 'YOUR_R2_ACCESS_KEY') {
+        if (!R2_CONFIG.endpoint || !R2_CONFIG.accessKeyId || !R2_CONFIG.secretAccessKey || !R2_CONFIG.bucketName) {
             console.log('⚠️ R2 not configured - skipping upload');
             return { success: false, error: 'R2 not configured' };
         }

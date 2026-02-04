@@ -37,8 +37,14 @@ jobs:
           npx @electron/rebuild
         working-directory: "./bg remover desktop"
 
-      - name: Build Windows app
-        run: npm run build:win
+      - name: Build/Publish Windows app
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            npm run publish:win
+          } else {
+            npm run build:win
+          }
+        shell: pwsh
         working-directory: "./bg remover desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,6 +56,7 @@ jobs:
           path: |
             ./bg remover desktop/dist/*.exe
             ./bg remover desktop/dist/*.exe.blockmap
+            ./bg remover desktop/dist/latest.yml
           retention-days: 30
 
   build-mac:
@@ -75,8 +82,13 @@ jobs:
           npx @electron/rebuild
         working-directory: "./bg remover desktop"
 
-      - name: Build macOS app
-        run: npm run build:mac
+      - name: Build/Publish macOS app
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            npm run publish:mac
+          else
+            npm run build:mac
+          fi
         working-directory: "./bg remover desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,32 +101,8 @@ jobs:
           path: |
             ./bg remover desktop/dist/*.dmg
             ./bg remover desktop/dist/*.dmg.blockmap
+            ./bg remover desktop/dist/*.zip
+            ./bg remover desktop/dist/*.zip.blockmap
+            ./bg remover desktop/dist/latest-mac.yml
           retention-days: 30
 
-  release:
-    needs: [build-windows, build-mac]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: BG-Remover-Windows
-          path: ./windows
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: BG-Remover-macOS
-          path: ./macos
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./windows/*.exe
-            ./macos/*.dmg
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
