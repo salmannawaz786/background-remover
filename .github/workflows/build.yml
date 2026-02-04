@@ -37,14 +37,8 @@ jobs:
           npx @electron/rebuild
         working-directory: "./bg remover desktop"
 
-      - name: Build/Publish Windows app
-        run: |
-          if ("${{ github.ref }}" -like "refs/tags/v*") {
-            npm run publish:win
-          } else {
-            npm run build:win
-          }
-        shell: pwsh
+      - name: Build Windows app
+        run: npm run build:win
         working-directory: "./bg remover desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -60,7 +54,15 @@ jobs:
           retention-days: 30
 
   build-mac:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            arch: x64
+          - os: macos-14
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -82,13 +84,8 @@ jobs:
           npx @electron/rebuild
         working-directory: "./bg remover desktop"
 
-      - name: Build/Publish macOS app
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            npm run publish:mac
-          else
-            npm run build:mac
-          fi
+      - name: Build macOS app (${{ matrix.arch }})
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
         working-directory: "./bg remover desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,12 +94,57 @@ jobs:
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BG-Remover-macOS
+          name: BG-Remover-macOS-${{ matrix.arch }}
           path: |
             ./bg remover desktop/dist/*.dmg
             ./bg remover desktop/dist/*.dmg.blockmap
             ./bg remover desktop/dist/*.zip
             ./bg remover desktop/dist/*.zip.blockmap
-            ./bg remover desktop/dist/latest-mac.yml
+            ./bg remover desktop/dist/latest-mac*.yml
           retention-days: 30
+
+  release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BG-Remover-Windows
+          path: ./windows
+
+      - name: Download macOS x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BG-Remover-macOS-x64
+          path: ./macos-x64
+
+      - name: Download macOS arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BG-Remover-macOS-arm64
+          path: ./macos-arm64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./windows/*.exe
+            ./windows/*.exe.blockmap
+            ./windows/latest.yml
+            ./macos-x64/*.dmg
+            ./macos-x64/*.dmg.blockmap
+            ./macos-x64/*.zip
+            ./macos-x64/*.zip.blockmap
+            ./macos-x64/latest-mac*.yml
+            ./macos-arm64/*.dmg
+            ./macos-arm64/*.dmg.blockmap
+            ./macos-arm64/*.zip
+            ./macos-arm64/*.zip.blockmap
+            ./macos-arm64/latest-mac*.yml
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
