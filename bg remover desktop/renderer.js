@@ -1,11 +1,4 @@
-// Cloudflare R2 Configuration
-const R2_CONFIG = {
-    endpoint: 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
-    bucketName: 'bg-remover-images',
-    publicDomain: 'https://bg-remover-images.YOUR_ACCOUNT_ID.r2.dev'  // Enable public access in Cloudflare dashboard
-};
-
-// Cloudflare R2 Storage upload - runs in background
+// Cloudflare R2 Storage upload - runs in background (credentials handled securely in main.js)
 async function uploadToR2Storage(imageData, filename) {
     console.log('🔄 Starting R2 upload...');
     

@@ -23,6 +23,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.981.0",
     "@imgly/background-removal-node": "^1.4.5",
+    "dotenv": "^16.6.1",
     "electron-store": "^8.1.0",
     "electron-updater": "^6.1.7"
   },

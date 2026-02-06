@@ -16,7 +16,9 @@ import uuid
 import sys
 from dotenv import load_dotenv
 import firebase_admin
-from firebase_admin import credentials, storage, auth as firebase_auth
+from firebase_admin import credentials, auth as firebase_auth
+import boto3
+from botocore.exceptions import ClientError
 from birefnet_model import BiRefNetLite
 # Load environment variables
 
@@ -50,7 +52,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Firebase Admin (for authentication and storage)
+# Initialize Firebase Admin (for authentication only)
 try:
     # Check if Firebase credentials are provided as JSON string (for Digital Ocean App Platform)
     firebase_creds_json = os.getenv('FIREBASE_CREDENTIALS_JSON')
@@ -66,14 +68,34 @@ try:
         cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json'))
         logger.info("Using Firebase credentials from file")
     
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': os.getenv('FIREBASE_STORAGE_BUCKET', 'your-project.appspot.com')
-    })
-    bucket = storage.bucket()
-    logger.info(f"Firebase initialized successfully with bucket: {os.getenv('FIREBASE_STORAGE_BUCKET')}")
+    firebase_admin.initialize_app(cred)
+    logger.info("Firebase Auth initialized successfully")
 except Exception as e:
     logger.warning(f"Firebase initialization failed: {str(e)}. Continuing without Firebase.")
-    bucket = None
+
+# Cloudflare R2 Configuration
+R2_ENDPOINT = os.getenv('R2_ENDPOINT', '')
+R2_ACCESS_KEY = os.getenv('R2_ACCESS_KEY', '')
+R2_SECRET_KEY = os.getenv('R2_SECRET_KEY', '')
+R2_BUCKET_NAME = os.getenv('R2_BUCKET_NAME', '')
+
+# Initialize R2 client
+s3_client = None
+if R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY:
+    try:
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+            region_name='auto'
+        )
+        logger.info(f"Cloudflare R2 client initialized - bucket: {R2_BUCKET_NAME}")
+    except Exception as e:
+        logger.warning(f"Could not initialize R2 client: {e}")
+        s3_client = None
+else:
+    logger.warning("R2 credentials not provided. Image upload to R2 will be disabled.")
 
 # Enable CORS
 CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST"], allow_headers=["Content-Type"])
@@ -403,27 +425,35 @@ def upload_image():
             future = executor.submit(process_image, filepath, hd_quality)
             img_io, processing_time = future.result(timeout=60 if hd_quality else 30)
             
-            # Copy image bytes for Firebase upload (so we can send response immediately)
+            # Copy image bytes for R2 upload (so we can send response immediately)
             img_io.seek(0)
             image_bytes = img_io.read()
             
-            # Upload to Firebase in background (truly fire-and-forget, no waiting)
-            if bucket:
-                def firebase_upload_background(img_bytes, blob_name):
+            # Upload to R2 in background (fire-and-forget)
+            if s3_client and R2_BUCKET_NAME:
+                def r2_upload_background(img_bytes, r2_key):
                     try:
-                        blob = bucket.blob(blob_name)
-                        blob.upload_from_string(img_bytes, content_type='image/png', timeout=30)
-                        blob.make_public()
-                        logger.info(f"Firebase upload success: {blob.public_url}")
+                        s3_client.put_object(
+                            Bucket=R2_BUCKET_NAME,
+                            Key=r2_key,
+                            Body=img_bytes,
+                            ContentType='image/png'
+                        )
+                        public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
+                        if public_domain:
+                            r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
+                        else:
+                            r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
+                        logger.info(f"R2 upload success: {r2_url}")
                     except Exception as e:
-                        logger.error(f"Firebase background upload error: {str(e)[:100]}")
+                        logger.error(f"R2 background upload error: {str(e)[:100]}")
                 
                 # Submit and forget - don't wait for result
-                blob_name = f"removed-bg-images/{unique_id}_{file.filename}"
-                executor.submit(firebase_upload_background, image_bytes, blob_name)
-                logger.info(f"Firebase upload started in background: {blob_name}")
+                r2_key = f"removed-bg-images/{unique_id}_{file.filename}"
+                executor.submit(r2_upload_background, image_bytes, r2_key)
+                logger.info(f"R2 upload started in background: {r2_key}")
             
-            # Send response immediately (don't wait for Firebase)
+            # Send response immediately (don't wait for R2)
             response_io = io.BytesIO(image_bytes)
             response = send_file(response_io, mimetype='image/png')
             response.headers['X-Processing-Time'] = str(processing_time)

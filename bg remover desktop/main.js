@@ -6,6 +6,21 @@ const { autoUpdater } = require('electron-updater');
 const Store = require('electron-store');
 const { setupAuthHandlers, getCurrentUser, setCurrentUser } = require('./auth');
 
+// Load .env file - check multiple locations for dev and packaged app
+const dotenv = require('dotenv');
+const envPaths = [
+    path.join(__dirname, '.env'),           // Desktop app folder (dev)
+    path.join(__dirname, '..', '.env'),     // Root repo folder (dev)
+    path.join(process.resourcesPath || __dirname, '.env')  // Packaged app resources
+];
+for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+        dotenv.config({ path: envPath });
+        console.log('Loaded .env from:', envPath);
+        break;
+    }
+}
+
 // Initialize persistent store
 const store = new Store({
     encryptionKey: 'sallulabs-bg-remover-secure-key-2024'
