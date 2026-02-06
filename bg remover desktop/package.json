@@ -39,8 +39,8 @@
     ],
     "extraResources": [
       {
-        "from": "birefnet_server.py",
-        "to": "birefnet_server.py"
+        "from": "birefnet_server_onnx.py",
+        "to": "birefnet_server_onnx.py"
       },
       {
         "from": "../birefnet_model.py",
