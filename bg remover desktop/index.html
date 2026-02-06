@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https: blob:; connect-src 'self' data: blob: https://*.firebaseio.com https://*.googleapis.com https://firebasestorage.googleapis.com https://*.cloudfunctions.net https://*.firebaseapp.com https://*.r2.cloudflarestorage.com https://*.r2.dev; frame-src 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https: blob:; connect-src 'self' data: blob: https://*.firebaseio.com https://*.googleapis.com https://*.firebaseapp.com https://*.r2.cloudflarestorage.com https://*.r2.dev; frame-src 'none';">
     <title>BG Remover - Desktop</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,7 +14,7 @@
             <div class="logo">
                 <img src="assets/logo.png" alt="Logo" class="logo-img">
                 <span class="logo-text">BG Remover</span>
-                <span class="badge">OFFLINE</span>
+                <span class="badge">DESKTOP</span>
             </div>
             <div class="header-actions">
                 <span id="user-info" style="display: none; margin-right: 15px; color: var(--text-secondary); font-size: 14px;"></span>
@@ -36,6 +36,20 @@
                 <div class="mode-selector">
                     <button class="mode-btn active" data-mode="single">Single Image</button>
                     <button class="mode-btn" data-mode="batch">Multiple Images</button>
+                    <!-- Speed / HD Mode Toggle -->
+                    <div class="quality-toggle">
+                        <span class="toggle-label speed-label">Speed</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="hd-mode-toggle" />
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="toggle-label hd-label">HD</span>
+                    </div>
+                </div>
+                <!-- Device Info -->
+                <div class="device-badge" id="device-badge">
+                    <span class="device-icon" id="device-icon"></span>
+                    <span id="device-name">Detecting...</span>
                 </div>
 
                 <!-- Upload Area -->
@@ -92,13 +106,12 @@
         </footer>
     </div>
 
-    <!-- Initialize Firebase with Auth + Storage -->
+    <!-- Initialize Firebase Auth (Storage removed - using R2 instead) -->
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
-        import { getStorage, ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-storage.js';
         import { getAuth, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
         
-        console.log('🔄 Initializing Firebase...');
+        console.log('🔄 Initializing Firebase Auth...');
         
         const firebaseConfig = {
             apiKey: "AIzaSyA8D2w0J8auihu3BbR8McIpoSduDfI2jxo",
@@ -111,16 +124,13 @@
         
         try {
             const app = initializeApp(firebaseConfig);
-            const storage = getStorage(app);
             const auth = getAuth(app);
             
-            // Export globally
-            window.firebaseStorage = { storage, ref, uploadBytes, getDownloadURL };
+            // Export globally (Auth only, no Storage)
             window.firebaseAuth = auth;
             window.firebaseApp = app;
-            window.firebaseStorageReady = true;
             
-            console.log('✅ Firebase initialized!');
+            console.log('✅ Firebase Auth initialized!');
             
             // Check if user session exists from localStorage (set during login)
             const storedUser = localStorage.getItem('user');
@@ -138,13 +148,12 @@
                     console.log('✅ Firebase Auth: User signed in:', user.email);
                     window.firebaseAuthUser = user;
                 } else {
-                    console.log('⚠️ Firebase Auth: No user (will use stored session for uploads)');
+                    console.log('⚠️ Firebase Auth: No user');
                 }
             });
             
         } catch (error) {
-            console.error('❌ Firebase init error:', error);
-            window.firebaseStorageReady = false;
+            console.error('❌ Firebase Auth init error:', error);
         }
     </script>
     

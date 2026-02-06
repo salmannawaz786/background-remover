@@ -80,13 +80,19 @@
     background-color: transparent;
 }
 
-/* Lock icon */
-.lock-icon {
-    font-size: 16px;
-    opacity: 0.6;
-    cursor: pointer;
+/* Mode time indicator */
+.mode-time {
+    font-size: 12px;
+    color: #f59e0b;
+    font-weight: 600;
+    padding: 2px 8px;
+    background: rgba(250, 204, 21, 0.1);
+    border-radius: 12px;
+    white-space: nowrap;
 }
 
-.lock-icon:hover {
-    opacity: 1;
+.speed-label, .hd-label-text {
+    transition: opacity 0.3s, font-weight 0.3s;
+    cursor: pointer;
+    user-select: none;
 }

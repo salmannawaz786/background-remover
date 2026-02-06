@@ -51,94 +51,6 @@ async function uploadToR2Storage(imageData, filename) {
     }
 }
 
-// Firebase Storage upload - runs in background
-async function uploadToFirebaseStorage(imageData, filename) {
-    console.log('🔄 Starting Firebase upload...');
-    
-    try {
-        // Check online
-        if (!navigator.onLine) {
-            console.log('⚠️ Offline - skipping');
-            return null;
-        }
-        
-        // Check Firebase
-        if (!window.firebaseStorage) {
-            console.error('❌ Firebase Storage not initialized');
-            return null;
-        }
-        
-        const { storage, ref, uploadBytes, getDownloadURL } = window.firebaseStorage;
-        
-        // Get user - try multiple sources
-        let userUid, userEmail;
-        
-        // 1. Try Firebase Auth user
-        if (window.firebaseAuthUser) {
-            userUid = window.firebaseAuthUser.uid;
-            userEmail = window.firebaseAuthUser.email;
-            console.log('✓ Using Firebase Auth user');
-        }
-        // 2. Try stored user from localStorage
-        else if (window.firebaseUser) {
-            userUid = window.firebaseUser.uid;
-            userEmail = window.firebaseUser.email;
-            console.log('✓ Using stored user session');
-        }
-        // 3. Try Electron auth state
-        else {
-            const authState = await window.electronAPI.auth.getState();
-            if (authState.isAuthenticated && authState.user) {
-                userUid = authState.user.uid;
-                userEmail = authState.user.email;
-                console.log('✓ Using Electron auth state');
-            }
-        }
-        
-        if (!userUid) {
-            console.log('⚠️ No user found - skipping upload');
-            return null;
-        }
-        
-        console.log('✓ User:', userEmail, 'UID:', userUid);
-        
-        // Convert to blob
-        const response = await fetch(imageData);
-        const blob = await response.blob();
-        console.log('✓ Blob size:', (blob.size / 1024).toFixed(2), 'KB');
-        
-        // Storage path
-        const timestamp = Date.now();
-        const storagePath = `users/${userUid}/processed/${timestamp}_${filename.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-        console.log('✓ Path:', storagePath);
-        
-        // Create reference and upload
-        const storageRef = ref(storage, storagePath);
-        
-        console.log('📤 Uploading...');
-        const uploadResult = await uploadBytes(storageRef, blob, {
-            contentType: 'image/png'
-        });
-        
-        const downloadURL = await getDownloadURL(uploadResult.ref);
-        console.log('✅ SUCCESS:', downloadURL);
-        
-        return downloadURL;
-        
-    } catch (error) {
-        console.error('❌ Upload failed:', error.code || error.message);
-        
-        // Log specific Firebase errors
-        if (error.code === 'storage/unauthorized') {
-            console.error('⚠️ Storage rules deny access. Check Firebase Console → Storage → Rules');
-        } else if (error.code === 'storage/unauthenticated') {
-            console.error('⚠️ User not authenticated with Firebase. Check auth flow.');
-        }
-        
-        return null;
-    }
-}
-
 // Check authentication on load - MANDATORY
 window.addEventListener('DOMContentLoaded', async () => {
     const authState = await window.electronAPI.auth.getState();
@@ -172,10 +84,55 @@ const processBatchBtn = document.getElementById('process-batch-btn');
 const downloadAllBtn = document.getElementById('download-all-btn');
 const modeButtons = document.querySelectorAll('.mode-btn');
 const themeToggle = document.getElementById('theme-toggle');
+const hdModeToggle = document.getElementById('hd-mode-toggle');
 
 let currentMode = 'single';
 let batchImages = [];
 let processedImages = [];
+
+// Speed / HD Mode Toggle
+const speedLabelEl = document.querySelector('.speed-label');
+const hdLabelEl = document.querySelector('.hd-label');
+
+function updateToggleLabels() {
+    if (hdModeToggle.checked) {
+        speedLabelEl.style.opacity = '0.5';
+        speedLabelEl.style.fontWeight = '400';
+        hdLabelEl.style.opacity = '1';
+        hdLabelEl.style.fontWeight = '700';
+    } else {
+        speedLabelEl.style.opacity = '1';
+        speedLabelEl.style.fontWeight = '700';
+        hdLabelEl.style.opacity = '0.5';
+        hdLabelEl.style.fontWeight = '400';
+    }
+}
+
+hdModeToggle.addEventListener('change', updateToggleLabels);
+updateToggleLabels();
+
+// Device Info Display
+async function showDeviceInfo() {
+    try {
+        const info = await window.electronAPI.getDeviceInfo();
+        const deviceIcon = document.getElementById('device-icon');
+        const deviceName = document.getElementById('device-name');
+        
+        if (info.isAppleSilicon) {
+            deviceIcon.textContent = '🍎';
+            deviceName.textContent = info.gpuName;
+        } else if (info.hasNvidiaGpu) {
+            deviceIcon.textContent = '🟢';
+            deviceName.textContent = info.gpuName;
+        } else {
+            deviceIcon.textContent = '💻';
+            deviceName.textContent = `CPU (${info.cpuCores} cores)`;
+        }
+    } catch (e) {
+        console.error('Failed to get device info:', e);
+    }
+}
+showDeviceInfo();
 
 // Logout functionality
 const logoutBtn = document.getElementById('logout-btn');
@@ -257,29 +214,33 @@ async function processSingleImage(image) {
     
     // Set original image
     originalImage.src = image.data;
-    console.log('Set original image');
+    
+    // Get current HD mode setting
+    const hdMode = hdModeToggle.checked;
+    console.log(`Processing in ${hdMode ? 'HD' : 'Speed'} mode:`, image.name);
     
     try {
-        // Pass file path instead of base64 data
-        console.log('Calling removeBackground with path:', image.path);
-        const result = await window.electronAPI.removeBackground(image.path);
+        const result = await window.electronAPI.removeBackground(image.path, hdMode);
         
         console.log('Result received:', result.success ? 'Success' : 'Failed');
         
         if (result.success) {
-            console.log('Setting result image, data length:', result.data ? result.data.length : 0);
+            // Fix image display: wait for load before showing container
+            resultImage.onload = () => {
+                processing.style.display = 'none';
+                resultsContainer.style.display = 'block';
+                console.log('Result image loaded and visible');
+            };
             resultImage.src = result.data;
-            processing.style.display = 'none';
-            resultsContainer.style.display = 'block';
-            console.log('UI updated - results should be visible');
             
-            // Upload to cloud storage in background (don't await, don't block UI)
+            // Fallback: show after 1s if onload doesn't fire (large images)
             setTimeout(() => {
-                // Upload to Firebase Storage
-                uploadToFirebaseStorage(result.data, image.name).catch(err => {
-                    console.error('Firebase upload error:', err);
-                });
-                // Upload to Cloudflare R2
+                processing.style.display = 'none';
+                resultsContainer.style.display = 'block';
+            }, 1000);
+            
+            // Upload to cloud storage in background (R2 only - don't await, don't block UI)
+            setTimeout(() => {
                 uploadToR2Storage(result.data, image.name).catch(err => {
                     console.error('R2 upload error:', err);
                 });
@@ -335,6 +296,8 @@ processBatchBtn.addEventListener('click', async () => {
     
     const items = batchGrid.querySelectorAll('.batch-item');
     
+    const hdMode = hdModeToggle.checked;
+    
     for (let i = 0; i < batchImages.length; i++) {
         const item = items[i];
         
@@ -345,8 +308,7 @@ processBatchBtn.addEventListener('click', async () => {
         item.appendChild(overlay);
         
         try {
-            // Pass file path instead of base64 data
-            const result = await window.electronAPI.removeBackground(batchImages[i].path);
+            const result = await window.electronAPI.removeBackground(batchImages[i].path, hdMode);
             
             overlay.remove();
             

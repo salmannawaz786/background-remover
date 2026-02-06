@@ -1,6 +1,5 @@
-from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for
+from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for, send_from_directory
 from flask_cors import CORS
-from rembg import remove, new_session
 from PIL import Image
 import io
 import logging
@@ -18,7 +17,7 @@ import sys
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, storage, auth as firebase_auth
-from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for, send_from_directory
+from birefnet_model import BiRefNetLite
 # Load environment variables
 
 # Load environment variables
@@ -94,22 +93,21 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 MAX_MEMORY_PERCENT = 92
 memory_warning_issued = False
 
-# Thread pool - BALANCED for quality and speed
+# Thread pool - Optimized for BiRefNet-Lite
 cpu_count = psutil.cpu_count(logical=False) or 2
-max_workers = int(os.getenv('MAX_WORKERS', max(2, min(cpu_count, 8))))
+max_workers = int(os.getenv('MAX_WORKERS', max(2, min(cpu_count, 4))))
 executor = ThreadPoolExecutor(max_workers=max_workers)
 logger.info(f"Initialized thread pool with {executor._max_workers} workers")
 
-# Load rembg model - HIGH QUALITY SETTINGS
-# u2net_human_seg is best for people, isnet-general-use for general objects
-# Using u2net for best overall quality
-model_name = os.getenv('MODEL_NAME', 'u2net')
+# Load BiRefNet-Lite model - FAST & HIGH QUALITY
 try:
-    session_rembg = new_session(model_name)
-    logger.info(f"Successfully loaded rembg model: {model_name}")
+    birefnet_model = BiRefNetLite()
+    device_info = birefnet_model.get_device_info()
+    logger.info(f"Successfully loaded BiRefNet-Lite model")
+    logger.info(f"Device info: {device_info}")
 except Exception as e:
-    logger.error(f"Failed to load model: {str(e)}")
-    session_rembg = None
+    logger.error(f"Failed to load BiRefNet-Lite model: {str(e)}")
+    birefnet_model = None
 
 # Authentication decorator
 def require_auth(f):
@@ -136,59 +134,58 @@ def require_auth(f):
     return decorated_function
 
 def process_image(image_path, hd_quality=False):
-    """Process image with quality settings based on user tier"""
+    """Process image with BiRefNet-Lite - optimized for speed and quality"""
     start_time = time.time()
     
     try:
         # Check memory - be more lenient, only block at critical levels
         mem_usage = check_memory_usage()
         if mem_usage > 95:
-            gc.collect()  # Try to free memory first
+            gc.collect()
+            if birefnet_model:
+                birefnet_model.clear_cache()
             mem_usage = check_memory_usage()
             if mem_usage > 95:
                 raise MemoryError("Server is busy. Please try again in a moment.")
         
+        if birefnet_model is None:
+            raise ValueError("Processing model not ready. Please refresh and try again.")
+        
         with Image.open(image_path) as input_image:
             original_size = input_image.size
-            original_mode = input_image.mode
             
             if hd_quality:
-                # HD: NO resize, NO compression - keep original quality
-                # Only resize if image is extremely large (over 4000px)
-                max_size = 4000
-                compress_level = 0  # No compression
-                logger.info(f"Processing in HD quality mode - preserving original quality")
+                # HD: Minimal resize, maximum quality
+                # BiRefNet-Lite can handle larger images efficiently
+                max_size = 4096
+                compress_level = 0
+                logger.info(f"Processing in HD quality mode - BiRefNet-Lite")
             else:
-                # Standard: Better quality for free tier (increased from 1200)
-                max_size = 2000
-                compress_level = 3  # Less compression for better quality
+                # Standard: Good balance for free tier
+                max_size = 2048
+                compress_level = 3
             
-            # Only resize if needed
+            # Resize if needed (BiRefNet-Lite is efficient, can handle larger images)
             if max(input_image.size) > max_size:
                 ratio = max_size / max(input_image.size)
                 new_size = tuple(int(dim * ratio) for dim in input_image.size)
                 input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
                 logger.info(f"Resized from {original_size} to {input_image.size}")
             else:
-                logger.info(f"Keeping original size: {original_size}")
+                logger.info(f"Processing at original size: {original_size}")
             
-            if session_rembg is None:
-                raise ValueError("Processing model not ready. Please refresh and try again.")
+            # Convert to RGB if needed
+            if input_image.mode != 'RGB':
+                input_image = input_image.convert('RGB')
             
-            # Process with quality settings
-            # Optimized alpha_matting settings for clean edges
-            output_image = remove(
-                input_image, 
-                session=session_rembg,
-                alpha_matting=True,
-                alpha_matting_foreground_threshold=270,
-                alpha_matting_background_threshold=20,
-                alpha_matting_erode_size=15,
-                post_process_mask=True
+            # Process with BiRefNet-Lite
+            # HD mode = 512px (better quality, ~8-9s) | Speed mode = 320px (~3-4s)
+            output_image = birefnet_model.remove_background(
+                input_image,
+                return_mask=False,
+                post_process=True,
+                hd_mode=hd_quality
             )
-            
-            # Cleanup input
-            del input_image
             
             # Save with appropriate compression
             img_io = io.BytesIO()
@@ -199,20 +196,26 @@ def process_image(image_path, hd_quality=False):
                 output_image.save(img_io, 'PNG', optimize=True, compress_level=compress_level)
             img_io.seek(0)
             
-            # Cleanup output
+            # Cleanup
+            del input_image
             del output_image
             gc.collect()
             
             processing_time = time.time() - start_time
-            logger.info(f"Processed in {processing_time:.2f}s (HD: {hd_quality})")
+            logger.info(f"BiRefNet-Lite processed in {processing_time:.2f}s (HD: {hd_quality})")
             
             return img_io, processing_time
+            
     except MemoryError as e:
         gc.collect()
+        if birefnet_model:
+            birefnet_model.clear_cache()
         raise
     except Exception as e:
         logger.error(f"Processing error: {str(e)}")
         gc.collect()
+        if birefnet_model:
+            birefnet_model.clear_cache()
         raise
 
 # Cache processed images
@@ -354,14 +357,8 @@ def upload_image():
         user_id = session.get('user_id')
         is_authenticated = user_id is not None
         
-        # HD quality check
+        # HD quality check (Speed/HD mode - available to all users)
         hd_quality = request.form.get('hd_quality', 'false').lower() == 'true'
-        
-        if hd_quality and not is_authenticated:
-            return jsonify({
-                'error': 'HD quality is only available for registered users. Please sign up to unlock HD quality!',
-                'requiresAuth': True
-            }), 403
         
         # File size limits
         max_size_free = 5 * 1024 * 1024  # 5MB for free users
@@ -460,14 +457,20 @@ def upload_image():
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
+    """Health check endpoint with BiRefNet-Lite info"""
     mem_usage = check_memory_usage()
-    return jsonify({
+    health_data = {
         'status': 'healthy' if mem_usage < MAX_MEMORY_PERCENT else 'degraded',
-        'model_loaded': session_rembg is not None,
+        'model': 'BiRefNet-Lite',
+        'model_loaded': birefnet_model is not None,
         'memory_usage': f"{mem_usage}%",
         'workers': executor._max_workers
-    })
+    }
+    
+    if birefnet_model:
+        health_data['device_info'] = birefnet_model.get_device_info()
+    
+    return jsonify(health_data)
 
 # Error handlers
 @app.errorhandler(413)
@@ -499,8 +502,8 @@ if __name__ == '__main__':
     cleanup_timer.daemon = True
     cleanup_timer.start()
     
-    logger.info("Starting Background Remover service...")
-    logger.info(f"Model: {model_name}, Workers: {max_workers}")
+    logger.info("Starting Background Remover service with BiRefNet-Lite...")
+    logger.info(f"Model: BiRefNet-Lite, Workers: {max_workers}")
     
     from waitress import serve
     serve(app, host="0.0.0.0", port=5000, threads=4)

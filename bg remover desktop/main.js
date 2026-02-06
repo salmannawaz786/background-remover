@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const Store = require('electron-store');
 const { setupAuthHandlers, getCurrentUser, setCurrentUser } = require('./auth');
@@ -25,6 +26,53 @@ app.commandLine.appendSwitch('enable-accelerated-video-decode');
 // Memory management for stability
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
+
+// ============================================
+// Device Detection: GPU + Apple Silicon
+// ============================================
+let deviceInfo = {
+    platform: process.platform,
+    arch: process.arch,
+    hasNvidiaGpu: false,
+    gpuName: 'CPU',
+    isAppleSilicon: false,
+    cpuCores: require('os').cpus().length,
+    optimalDevice: 'cpu'
+};
+
+function detectDevice() {
+    // Detect Apple Silicon (M1, M2, M3, M4)
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
+        deviceInfo.isAppleSilicon = true;
+        deviceInfo.gpuName = 'Apple Silicon (Metal)';
+        deviceInfo.optimalDevice = 'gpu';
+        console.log('Detected Apple Silicon - using Metal acceleration');
+    }
+    
+    // Detect NVIDIA GPU on Windows/Linux
+    if (process.platform === 'win32' || process.platform === 'linux') {
+        try {
+            const nvidiaSmi = execSync('nvidia-smi --query-gpu=name --format=csv,noheader,nounits', {
+                timeout: 5000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            }).toString().trim();
+            
+            if (nvidiaSmi) {
+                deviceInfo.hasNvidiaGpu = true;
+                deviceInfo.gpuName = nvidiaSmi.split('\n')[0].trim();
+                deviceInfo.optimalDevice = 'gpu';
+                console.log(`Detected NVIDIA GPU: ${deviceInfo.gpuName}`);
+            }
+        } catch (e) {
+            console.log('No NVIDIA GPU detected - using CPU');
+        }
+    }
+    
+    console.log('Device info:', JSON.stringify(deviceInfo, null, 2));
+    return deviceInfo;
+}
+
+detectDevice();
 
 // Prevent app from crashing on unhandled exceptions
 process.on('uncaughtException', (error) => {
@@ -320,6 +368,11 @@ ipcMain.handle('save-image', async (event, { data, defaultName }) => {
 // Track if processing is in progress to prevent multiple concurrent operations
 let isProcessing = false;
 
+// IPC handler for device info
+ipcMain.handle('get-device-info', () => {
+    return deviceInfo;
+});
+
 // Get the correct resource path for background removal library
 function getResourcePath() {
     if (app.isPackaged) {
@@ -332,49 +385,71 @@ function getResourcePath() {
 }
 
 // Handle background removal using file path directly (non-blocking)
-ipcMain.handle('remove-background', async (event, filePath) => {
+// Supports hdMode: true (high quality) or false (speed mode)
+ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
     // Prevent concurrent processing which can cause crashes
     if (isProcessing) {
         return { success: false, error: 'Another image is being processed. Please wait.' };
     }
     
     isProcessing = true;
+    const startTime = Date.now();
+    const modeName = hdMode ? 'HD' : 'Speed';
     
     try {
         const { removeBackground } = await import('@imgly/background-removal-node');
         
-        console.log('Processing image:', filePath);
-        console.log('App packaged:', app.isPackaged);
+        console.log(`[${modeName}] Processing image:`, filePath);
+        console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform, '| Arch:', deviceInfo.arch);
         
         // Convert Windows path to file:// URL format
         const { pathToFileURL } = require('url');
         const fileURL = pathToFileURL(filePath).href;
-        console.log('File URL:', fileURL);
         
         // Get resource path based on environment
         const resourcePath = getResourcePath();
-        console.log('Resource path:', resourcePath);
         
-        // Pass file URL with optimized settings and correct resource path
-        const resultBlob = await removeBackground(fileURL, {
+        // Configure based on Speed vs HD mode
+        const config = {
             publicPath: `file://${resourcePath}/`,
             progress: (key, current, total) => {
-                // Send progress updates - callback MUST return void (not Promise)
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('processing-progress', { key, current, total });
                 }
             },
             output: {
                 format: 'image/png',
-                quality: 1.0  // Maximum quality - original HD
+                quality: hdMode ? 1.0 : 0.8
             }
-        });
+        };
+        
+        // Speed mode: use smaller model for faster processing
+        if (!hdMode) {
+            config.model = 'small';
+        }
+        
+        // Device-specific optimizations
+        if (deviceInfo.isAppleSilicon) {
+            // Apple Silicon: CoreML acceleration via ONNX Runtime
+            config.device = 'gpu';
+            console.log('Using Apple Silicon Metal/CoreML acceleration');
+        } else if (deviceInfo.hasNvidiaGpu) {
+            // NVIDIA: CUDA acceleration
+            config.device = 'gpu';
+            console.log(`Using NVIDIA CUDA acceleration: ${deviceInfo.gpuName}`);
+        } else {
+            config.device = 'cpu';
+            console.log(`Using CPU (${deviceInfo.cpuCores} cores)`);
+        }
+        
+        const resultBlob = await removeBackground(fileURL, config);
         
         // Convert result to base64
         const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
         const resultBase64 = `data:image/png;base64,${resultBuffer.toString('base64')}`;
         
-        console.log('✅ Successfully processed image, buffer size:', (resultBuffer.length / 1024).toFixed(2), 'KB');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`✅ [${modeName}] Processed in ${elapsed}s, size: ${(resultBuffer.length / 1024).toFixed(1)}KB`);
         
         // Force garbage collection if available
         if (global.gc) {
