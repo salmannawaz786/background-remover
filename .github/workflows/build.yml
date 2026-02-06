@@ -44,7 +44,7 @@ jobs:
           retention-days: 30
 
   build-mac-x64:
-    runs-on: macos-13
+    runs-on: macos-15-large
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
