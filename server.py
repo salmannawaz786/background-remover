@@ -483,6 +483,45 @@ def health():
     
     return jsonify(health_data)
 
+@app.route('/api/upload-to-r2', methods=['POST'])
+def upload_processed_to_r2():
+    """Upload a client-processed image directly to R2 (no server-side processing needed)"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image provided'}), 400
+        
+        file = request.files['image']
+        image_bytes = file.read()
+        
+        if not image_bytes:
+            return jsonify({'error': 'Empty file'}), 400
+        
+        if s3_client and R2_BUCKET_NAME:
+            unique_id = str(uuid.uuid4())[:8]
+            safe_name = secure_filename(file.filename or 'processed.webp')
+            r2_key = f"removed-bg-images/{unique_id}_{safe_name}"
+            
+            s3_client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=r2_key,
+                Body=image_bytes,
+                ContentType=file.content_type or 'image/webp'
+            )
+            
+            public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
+            if public_domain:
+                r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
+            else:
+                r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
+            
+            logger.info(f"Client-processed image uploaded to R2: {r2_url}")
+            return jsonify({'success': True, 'key': r2_key, 'url': r2_url})
+        else:
+            return jsonify({'success': False, 'error': 'R2 not configured'}), 503
+    except Exception as e:
+        logger.error(f"R2 direct upload error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Upload failed'}), 500
+
 # Error handlers
 @app.errorhandler(413)
 def request_entity_too_large(error):

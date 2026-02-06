@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="../static/theme-toggle.css">
     <link rel="stylesheet" href="../static/quality-toggle.css">
     <script defer src="../static/scripts.js"></script>
+    <script defer src="../static/client-processor.js"></script>
     <link rel="stylesheet" href="../static/theme.css">
     <script src="https://kit.fontawesome.com/0401efc0fe.js" crossorigin="anonymous"></script>
     <script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateInit"></script>
@@ -148,6 +149,13 @@
     </div>
     
 
+
+    <!-- Client AI status badge -->
+    <div id="ai-status-badge" class="ai-status-badge" style="display:none;">
+        <span id="ai-status-icon"></span>
+        <span id="ai-status-text"></span>
+        <div id="ai-progress-bar" class="ai-progress-bar" style="display:none;"><div id="ai-progress-fill" class="ai-progress-fill"></div></div>
+    </div>
 
     <div class="main-content">
         <div class="container">
@@ -455,6 +463,45 @@
             }
         }
 
+        // Process a single image via client-side AI or server fallback
+        async function processImageClientSide(file) {
+            try {
+                const blob = await ClientProcessor.removeBackground(file);
+                // Upload to R2 in background (fire-and-forget)
+                ClientProcessor.uploadToR2(blob, file.name);
+                return blob;
+            } catch (e) {
+                console.log('[ClientAI] Client processing failed, falling back to server:', e.message);
+                return null;
+            }
+        }
+
+        async function processImageServer(file) {
+            const formData = new FormData();
+            formData.append('image_file', file);
+            const hdToggle = document.getElementById('hd-quality-toggle');
+            formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                return await response.blob();
+            } else {
+                const errorData = await response.json().catch(() => ({ error: response.statusText }));
+                if (errorData.requiresAuth) {
+                    if (confirm(errorData.error + '\n\nWould you like to sign up now?')) {
+                        window.location.href = '/signup';
+                    }
+                } else {
+                    alert(errorData.error || 'Error processing image');
+                }
+                return null;
+            }
+        }
+
         async function processImage(file) {
             if (file) {
                 // Clear previous results before processing new image
@@ -468,28 +515,25 @@
                 // Store original image for before/after comparison
                 const originalURL = URL.createObjectURL(file);
 
-                const formData = new FormData();
-                formData.append('image_file', file);
-                
-                // Add HD quality setting
-                const hdToggle = document.getElementById('hd-quality-toggle');
-                formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
-
                 try {
-                    const response = await fetch('/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
+                    let blob = null;
 
-                    if (response.ok) {
-                        const blob = await response.blob();
+                    // Try client-side processing first (Apple Silicon / NVIDIA)
+                    if (typeof ClientProcessor !== 'undefined' && ClientProcessor.isModelReady) {
+                        blob = await processImageClientSide(file);
+                    }
+
+                    // Fallback to server
+                    if (!blob) {
+                        blob = await processImageServer(file);
+                    }
+
+                    if (blob) {
                         const objectURL = URL.createObjectURL(blob);
 
-                        // Show before/after comparison - wait for images to load
+                        // Show before/after comparison
                         originalImage.style.display = 'block';
                         uploadedImage.style.display = 'block';
-                        
-                        // Set sources and show container after result loads
                         originalImage.src = originalURL;
                         uploadedImage.onload = () => {
                             comparisonContainer.style.display = 'block';
@@ -497,42 +541,24 @@
                         };
                         uploadedImage.src = objectURL;
                         
-                        // Fallback: show after short delay if onload doesn't fire
                         setTimeout(() => {
                             comparisonContainer.style.display = 'block';
                             downloadButton.style.display = 'block';
                         }, 500);
 
                         successNotification.style.display = 'block';
-                        setTimeout(() => {
-                            successNotification.style.display = 'none';
-                        }, 3000);
+                        setTimeout(() => { successNotification.style.display = 'none'; }, 3000);
                         
-                        // Reset file input and restore upload UI for next image
                         imageInput.value = '';
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';
                     } else {
-                        // Handle error responses with proper messages
-                        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-                        
-                        if (errorData.requiresAuth) {
-                            // Show sign-up prompt for premium features
-                            if (confirm(errorData.error + '\n\nWould you like to sign up now?')) {
-                                window.location.href = '/signup';
-                            }
-                        } else {
-                            alert(errorData.error || 'Error processing image');
-                        }
-                        
-                        // Restore UI on error
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';
                     }
                 } catch (error) {
                     console.error('Error processing image:', error);
                     alert('Error processing image. Please try again.');
-                    // Restore UI on error
                     uploadButton.style.display = 'block';
                     dropArea.style.display = 'block';
                 } finally {
@@ -598,20 +624,27 @@
                 if (overlay) overlay.style.display = 'flex';
                 if (statusEl) statusEl.textContent = '';
                 
-                const formData = new FormData();
-                formData.append('image_file', file);
-                formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
-                
                 try {
-                    const response = await fetch('/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    if (response.ok) {
-                        const blob = await response.blob();
+                    let blob = null;
+
+                    // Try client-side processing first
+                    if (typeof ClientProcessor !== 'undefined' && ClientProcessor.isModelReady) {
+                        blob = await processImageClientSide(file);
+                    }
+
+                    // Fallback to server
+                    if (!blob) {
+                        const formData = new FormData();
+                        formData.append('image_file', file);
+                        formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
+                        const response = await fetch('/upload', { method: 'POST', body: formData });
+                        if (response.ok) {
+                            blob = await response.blob();
+                        }
+                    }
+
+                    if (blob) {
                         processedImages.push(blob);
-                        
                         const objectURL = URL.createObjectURL(blob);
                         if (card) {
                             card.querySelector('img').src = objectURL;
@@ -642,7 +675,6 @@
                     processedImages.push(null);
                     if (statusEl) statusEl.innerHTML = '<span class="status-error">✗</span>';
                 } finally {
-                    // Hide loading overlay for this image
                     if (overlay) overlay.style.display = 'none';
                 }
             }
@@ -699,6 +731,67 @@
         // Set initial state
         speedLabel.style.fontWeight = '700';
         hdLabel.style.opacity = '0.5';
+
+        // ── Client-side AI initialization ──
+        // Detects Apple Silicon / NVIDIA GPU, downloads model in background
+        (async function initClientAI() {
+            if (typeof ClientProcessor === 'undefined') return;
+
+            const badge = document.getElementById('ai-status-badge');
+            const icon = document.getElementById('ai-status-icon');
+            const text = document.getElementById('ai-status-text');
+            const bar = document.getElementById('ai-progress-bar');
+            const fill = document.getElementById('ai-progress-fill');
+
+            // 1. Fast device detection
+            const capable = await ClientProcessor.detectDevice();
+            if (!capable) return; // Not a supported device — use server silently
+
+            const gpuName = ClientProcessor.deviceInfo.gpu || 'GPU';
+            const shortGpu = ClientProcessor.deviceInfo.isAppleSilicon ? 'Apple Silicon' : 'NVIDIA GPU';
+
+            // 2. Check if model is already cached
+            const cached = await ClientProcessor.isModelCached();
+
+            if (cached) {
+                // Model cached — load instantly, show ready badge
+                badge.style.display = 'flex';
+                icon.textContent = '⚡';
+                text.textContent = `Loading AI on ${shortGpu}...`;
+
+                const ok = await ClientProcessor.initModel();
+                if (ok) {
+                    icon.textContent = '⚡';
+                    text.textContent = `Running on your ${shortGpu}`;
+                    badge.classList.add('ai-ready');
+                } else {
+                    badge.style.display = 'none';
+                }
+            } else {
+                // Model not cached — download in background while user uses server
+                badge.style.display = 'flex';
+                icon.textContent = '🔄';
+                text.textContent = `Optimizing for your ${shortGpu}...`;
+                bar.style.display = 'block';
+                fill.style.width = '0%';
+
+                const ok = await ClientProcessor.initModel((progress, file) => {
+                    fill.style.width = progress + '%';
+                    if (progress >= 100) {
+                        bar.style.display = 'none';
+                    }
+                });
+
+                if (ok) {
+                    bar.style.display = 'none';
+                    icon.textContent = '⚡';
+                    text.textContent = `Running on your ${shortGpu}`;
+                    badge.classList.add('ai-ready');
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        })();
         
     </script>
     <script>

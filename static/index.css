@@ -235,6 +235,54 @@ body{
             border: 2px solid #28a745;
         }
 
+        /* Client AI Status Badge */
+        .ai-status-badge {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 24px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: all 0.3s ease;
+            max-width: 320px;
+            flex-wrap: wrap;
+        }
+
+        .ai-status-badge.ai-ready {
+            background: rgba(40, 167, 69, 0.9);
+        }
+
+        .ai-progress-bar {
+            width: 100%;
+            height: 3px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .ai-progress-fill {
+            height: 100%;
+            background: #4fc3f7;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        body.dark-mode .ai-status-badge {
+            background: rgba(30, 30, 30, 0.95);
+        }
+
+        body.dark-mode .ai-status-badge.ai-ready {
+            background: rgba(40, 167, 69, 0.85);
+        }
+
         .card-download-btn {
             position: absolute;
             bottom: 8px;
