@@ -1,20 +1,25 @@
-// Cloudflare R2 Storage upload - runs in background (credentials handled securely in main.js)
-async function uploadToR2Storage(imageData, filename) {
-    console.log('🔄 Starting R2 upload...');
+// Cloudflare R2 Storage upload - only if user is authenticated and online
+async function uploadToR2IfAuthenticated(imageData, filename) {
+    console.log('🔄 Checking R2 upload conditions...');
     
     try {
-        // Check online
+        // Check online status
         if (!navigator.onLine) {
             console.log('⚠️ Offline - skipping R2 upload');
             return null;
         }
         
-        // Get user info for folder organization
-        let userUid = 'anonymous';
+        // Check if user is authenticated
         const authState = await window.electronAPI.auth.getState();
-        if (authState.isAuthenticated && authState.user) {
-            userUid = authState.user.uid;
+        if (!authState.isAuthenticated || !authState.user) {
+            console.log('⚠️ User not authenticated - skipping R2 upload (saving locally only)');
+            return null;
         }
+        
+        console.log('✅ User authenticated, proceeding with R2 upload...');
+        
+        // Get user UID for folder organization
+        const userUid = authState.user.uid;
         
         // Convert to blob
         const response = await fetch(imageData);
@@ -42,6 +47,11 @@ async function uploadToR2Storage(imageData, filename) {
         console.error('❌ R2 upload error:', error.message);
         return null;
     }
+}
+
+// Legacy function - kept for backward compatibility
+async function uploadToR2Storage(imageData, filename) {
+    return uploadToR2IfAuthenticated(imageData, filename);
 }
 
 // Check authentication on load - MANDATORY
@@ -101,7 +111,19 @@ function updateToggleLabels() {
     }
 }
 
-hdModeToggle.addEventListener('change', updateToggleLabels);
+hdModeToggle.addEventListener('change', () => {
+    updateToggleLabels();
+    // Save preference to localStorage
+    localStorage.setItem('hdMode', hdModeToggle.checked ? 'hd' : 'speed');
+});
+
+// Load saved HD mode preference
+const savedHdMode = localStorage.getItem('hdMode');
+if (savedHdMode === 'hd') {
+    hdModeToggle.checked = true;
+} else if (savedHdMode === 'speed') {
+    hdModeToggle.checked = false;
+}
 updateToggleLabels();
 
 // Device Info Display
@@ -232,9 +254,9 @@ async function processSingleImage(image) {
                 resultsContainer.style.display = 'block';
             }, 1000);
             
-            // Upload to cloud storage in background (R2 only - don't await, don't block UI)
+            // Upload to cloud storage in background (R2 only if authenticated and online)
             setTimeout(() => {
-                uploadToR2Storage(result.data, image.name).catch(err => {
+                uploadToR2IfAuthenticated(result.data, image.name).catch(err => {
                     console.error('R2 upload error:', err);
                 });
             }, 100);
@@ -313,6 +335,11 @@ processBatchBtn.addEventListener('click', async () => {
                 status.className = 'status success';
                 status.textContent = '✓';
                 item.appendChild(status);
+                
+                // Upload to R2 in background if authenticated
+                uploadToR2IfAuthenticated(result.data, batchImages[i].name).catch(err => {
+                    console.error('Batch R2 upload error:', err);
+                });
             } else {
                 processedImages.push(null);
                 

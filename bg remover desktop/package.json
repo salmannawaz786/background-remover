@@ -22,10 +22,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.981.0",
-    "@imgly/background-removal-node": "^1.4.5",
     "dotenv": "^16.6.1",
     "electron-store": "^8.1.0",
-    "electron-updater": "^6.1.7"
+    "electron-updater": "^6.1.7",
+    "sharp": "^0.32.6"
   },
   "build": {
     "appId": "com.sallulabs.bgremover",
@@ -39,11 +39,16 @@
     ],
     "extraResources": [
       {
-        "from": "node_modules/@imgly/background-removal-node/dist",
-        "to": "bg-removal-resources",
-        "filter": [
-          "**/*"
-        ]
+        "from": "birefnet_server.py",
+        "to": "birefnet_server.py"
+      },
+      {
+        "from": "../birefnet_model.py",
+        "to": "birefnet_model.py"
+      },
+      {
+        "from": "../birefnet_pytorch.py",
+        "to": "birefnet_pytorch.py"
       }
     ],
     "win": {

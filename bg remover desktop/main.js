@@ -383,6 +383,122 @@ ipcMain.handle('save-image', async (event, { data, defaultName }) => {
 // Track if processing is in progress to prevent multiple concurrent operations
 let isProcessing = false;
 
+// Persistent Python BiRefNet server
+let birefnetServer = null;
+let serverReady = false;
+
+// Start the persistent Python server
+function startBiRefNetServer() {
+    if (birefnetServer) return;
+    
+    const { spawn } = require('child_process');
+    const scriptPath = path.join(__dirname, 'birefnet_server.py');
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    
+    console.log('Starting BiRefNet Python server...');
+    
+    birefnetServer = spawn(pythonCmd, [scriptPath], {
+        cwd: __dirname,
+        env: {
+            ...process.env,
+            PYTHONPATH: path.dirname(__dirname)
+        },
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    let buffer = '';
+    
+    birefnetServer.stdout.on('data', (data) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep incomplete line in buffer
+        
+        for (const line of lines) {
+            if (line.trim()) {
+                try {
+                    const msg = JSON.parse(line);
+                    if (msg.status === 'ready') {
+                        serverReady = true;
+                        console.log('✅ BiRefNet server ready');
+                    }
+                } catch (e) {
+                    // Not JSON, just log it
+                    console.log('[Python]', line);
+                }
+            }
+        }
+    });
+    
+    birefnetServer.stderr.on('data', (data) => {
+        console.log('[Python stderr]', data.toString().trim());
+    });
+    
+    birefnetServer.on('close', (code) => {
+        console.log(`BiRefNet server exited with code ${code}`);
+        birefnetServer = null;
+        serverReady = false;
+    });
+    
+    birefnetServer.on('error', (err) => {
+        console.error('Failed to start BiRefNet server:', err);
+    });
+}
+
+// Process image using persistent server
+async function processWithServer(filePath, hdMode) {
+    return new Promise((resolve, reject) => {
+        if (!birefnetServer || !serverReady) {
+            reject(new Error('Server not ready'));
+            return;
+        }
+        
+        const cmd = JSON.stringify({
+            action: 'process',
+            path: filePath,
+            hd_mode: hdMode
+        }) + '\n';
+        
+        let responseBuffer = '';
+        
+        const onData = (data) => {
+            responseBuffer += data.toString();
+            const lines = responseBuffer.split('\n');
+            responseBuffer = lines.pop();
+            
+            for (const line of lines) {
+                if (line.trim()) {
+                    try {
+                        const result = JSON.parse(line);
+                        birefnetServer.stdout.off('data', onData);
+                        resolve(result);
+                        return;
+                    } catch (e) {
+                        // Continue waiting for valid JSON
+                    }
+                }
+            }
+        };
+        
+        birefnetServer.stdout.on('data', onData);
+        birefnetServer.stdin.write(cmd);
+    });
+}
+
+// Start server when app is ready
+app.whenReady().then(() => {
+    startBiRefNetServer();
+});
+
+// Clean up server on exit
+app.on('before-quit', () => {
+    if (birefnetServer) {
+        birefnetServer.stdin.write('{"action":"exit"}\n');
+        setTimeout(() => {
+            if (birefnetServer) birefnetServer.kill();
+        }, 1000);
+    }
+});
+
 // IPC handler for device info
 ipcMain.handle('get-device-info', () => {
     return deviceInfo;
@@ -428,10 +544,10 @@ async function resizeIfNeeded(filePath, maxDimension = 4096) {
     }
 }
 
-// Handle background removal using file path directly (non-blocking)
+// Handle background removal using persistent Python BiRefNet server
 // Supports hdMode: true (high quality) or false (speed mode)
 ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
-    // Prevent concurrent processing which can cause crashes
+    // Prevent concurrent processing
     if (isProcessing) {
         return { success: false, error: 'Another image is being processed. Please wait.' };
     }
@@ -439,106 +555,55 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
     isProcessing = true;
     const startTime = Date.now();
     const modeName = hdMode ? 'HD' : 'Speed';
-    let tempFilePath = null;
     
     try {
-        const { removeBackground } = await import('@imgly/background-removal-node');
-        
-        // Check file size and resize if very large to prevent OOM
+        // Check file size
         const fileStats = fs.statSync(filePath);
         const fileSizeMB = fileStats.size / (1024 * 1024);
         console.log(`[${modeName}] Processing image: ${filePath} (${fileSizeMB.toFixed(1)}MB)`);
-        console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform, '| Arch:', deviceInfo.arch);
+        console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform);
+        console.log('Using persistent BiRefNet server');
         
-        // For files > 8MB, resize down to prevent memory crashes
-        let processPath = filePath;
-        if (fileSizeMB > 8) {
-            const maxDim = hdMode ? 3000 : 2000;
-            processPath = await resizeIfNeeded(filePath, maxDim);
-            if (processPath !== filePath) {
-                tempFilePath = processPath;
-                console.log(`Large file (${fileSizeMB.toFixed(1)}MB) - resized for safe processing`);
-            }
+        // Wait for server to be ready (max 60s on first run for model download)
+        let waitTime = 0;
+        while (!serverReady && waitTime < 60000) {
+            await new Promise(r => setTimeout(r, 500));
+            waitTime += 500;
         }
         
-        // Convert Windows path to file:// URL format
-        const { pathToFileURL } = require('url');
-        const fileURL = pathToFileURL(processPath).href;
-        
-        // Get resource path based on environment
-        const resourcePath = getResourcePath();
-        
-        // Configure based on Speed vs HD mode
-        const config = {
-            publicPath: `file://${resourcePath}/`,
-            progress: (key, current, total) => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('processing-progress', { key, current, total });
-                }
-            },
-            output: {
-                format: 'image/png',
-                quality: hdMode ? 1.0 : 0.8
-            }
-        };
-        
-        // Speed mode: use smaller model for faster processing
-        if (!hdMode) {
-            config.model = 'small';
+        if (!serverReady) {
+            throw new Error('BiRefNet server failed to start. Check Python dependencies.');
         }
         
-        // Device-specific optimizations
-        if (deviceInfo.isAppleSilicon) {
-            // Apple Silicon: CoreML acceleration via ONNX Runtime
-            config.device = 'gpu';
-            console.log('Using Apple Silicon Metal/CoreML acceleration');
-        } else if (deviceInfo.hasNvidiaGpu) {
-            // NVIDIA: CUDA acceleration
-            config.device = 'gpu';
-            console.log(`Using NVIDIA CUDA acceleration: ${deviceInfo.gpuName}`);
-        } else {
-            config.device = 'cpu';
-            console.log(`Using CPU (${deviceInfo.cpuCores} cores)`);
+        // Process via persistent server
+        const result = await processWithServer(filePath, hdMode);
+        
+        if (!result.success) {
+            throw new Error(result.error || 'Processing failed');
         }
         
-        const resultBlob = await removeBackground(fileURL, config);
-        
-        // Convert result to base64
-        const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
-        const resultBase64 = `data:image/png;base64,${resultBuffer.toString('base64')}`;
-        
+        const resultBase64 = `data:image/webp;base64,${result.data}`;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`✅ [${modeName}] Processed in ${elapsed}s, size: ${(resultBuffer.length / 1024).toFixed(1)}KB`);
         
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
-        }
+        console.log(`✅ [${modeName}] Total: ${elapsed}s (Processing: ${result.time}s), size: ${(result.data.length * 0.75 / 1024).toFixed(1)}KB`);
         
         isProcessing = false;
         return { success: true, data: resultBase64 };
+        
     } catch (error) {
         console.error('❌ Background removal error:', error);
         isProcessing = false;
         
-        // Force garbage collection on error too
-        if (global.gc) {
-            global.gc();
-        }
-        
-        // User-friendly error messages
+        // User-friendly errors
         let userError = error.message;
-        if (error.message.includes('memory') || error.message.includes('OOM') || error.message.includes('allocation')) {
-            userError = 'Image is too large for available memory. Try a smaller image or close other apps.';
-        } else if (error.message.includes('timeout')) {
-            userError = 'Processing took too long. Try Speed mode or a smaller image.';
+        if (error.message.includes('python') || error.message.includes('Python')) {
+            userError = 'Python is not installed. Please install Python 3.8+ from python.org';
+        } else if (error.message.includes('No module named')) {
+            userError = 'Missing Python packages. Run: pip install torch torchvision pillow numpy transformers einops kornia';
+        } else if (error.message.includes('memory') || error.message.includes('OOM')) {
+            userError = 'Image too large for memory. Try Speed mode.';
         }
         
         return { success: false, error: userError };
-    } finally {
-        // Clean up temp file if we created one
-        if (tempFilePath) {
-            try { fs.unlinkSync(tempFilePath); } catch (e) {}
-        }
     }
 });
