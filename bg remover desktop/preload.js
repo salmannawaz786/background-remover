@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
     
     // Cloudflare R2 Storage
-    uploadToR2: (base64Data, filename) => ipcRenderer.invoke('upload-to-r2', { base64Data, filename }),
+    uploadToR2: (imageData, filename) => ipcRenderer.invoke('upload-to-r2', { imageData, filename }),
     
     // Authentication APIs
     auth: {

@@ -21,18 +21,14 @@ async function uploadToR2IfAuthenticated(imageData, filename) {
         // Get user UID for folder organization
         const userUid = authState.user.uid;
         
-        // Calculate size for logging
-        const base64Content = imageData.replace(/^data:image\/\w+;base64,/, '');
-        const sizeKB = (base64Content.length * 0.75 / 1024).toFixed(2);
-        console.log('✓ Image size:', sizeKB, 'KB');
-        
         // Generate unique filename
         const timestamp = Date.now();
         const uniqueId = Math.random().toString(36).substring(2, 10);
         const safeName = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
         const r2Key = `processed/${userUid}/${timestamp}_${uniqueId}_${safeName}`;
         
-        // Upload via main process (handles R2 credentials securely) - pass base64 directly
+        // Send data URL string directly (Blobs can't cross IPC boundary)
+        console.log('✓ Uploading data URL, length:', (imageData.length / 1024).toFixed(2), 'KB');
         const result = await window.electronAPI.uploadToR2(imageData, r2Key);
         
         if (result.success) {

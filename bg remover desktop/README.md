@@ -45,22 +45,18 @@ Built files will be in the `dist` folder.
 
 ## Requirements
 
-- Node.js 18+
-- Python 3.8+ with dependencies:
-  ```bash
-  pip install onnxruntime pillow numpy opencv-python-headless
-  ```
+- Node.js 18+ 
+- npm or yarn
 
 ## Tech Stack
 
 - Electron.js
-- ONNX Runtime (AI background removal - 5x faster than PyTorch)
-- BiRefNet-Lite model
+- @imgly/background-removal-node (AI background removal)
 - Vanilla JavaScript
 
 ## Note
 
-The AI model loads in 2-3 seconds on startup (ONNX Runtime). First-time setup may download the model (~200MB) which is cached for future use.
+The first time you process an image, the AI model will be downloaded (~30MB). After that, everything works offline.
 
 ## License
 

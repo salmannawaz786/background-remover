@@ -232,7 +232,7 @@ const R2_CONFIG = {
 };
 
 // R2 upload handler
-ipcMain.handle('upload-to-r2', async (event, { base64Data, filename }) => {
+ipcMain.handle('upload-to-r2', async (event, { imageData, filename }) => {
     try {
         // Check if R2 is configured
         if (!R2_CONFIG.endpoint || !R2_CONFIG.accessKeyId || !R2_CONFIG.secretAccessKey || !R2_CONFIG.bucketName) {
@@ -240,8 +240,8 @@ ipcMain.handle('upload-to-r2', async (event, { base64Data, filename }) => {
             return { success: false, error: 'R2 not configured' };
         }
         
-        // Dynamic import for AWS SDK
-        const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+        // Use require for AWS SDK (CommonJS compatible with Electron)
+        const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
         
         // Initialize S3 client for R2
         const s3Client = new S3Client({
@@ -253,23 +253,30 @@ ipcMain.handle('upload-to-r2', async (event, { base64Data, filename }) => {
             }
         });
         
-        // Convert base64 data URL to buffer
+        // Convert data URL to buffer
         let buffer;
-        if (typeof base64Data === 'string' && base64Data.startsWith('data:')) {
-            const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, '');
-            buffer = Buffer.from(base64Content, 'base64');
-        } else if (typeof base64Data === 'string') {
+        let contentType = 'image/webp';
+        if (typeof imageData === 'string' && imageData.startsWith('data:')) {
+            // Extract content type from data URL
+            const mimeMatch = imageData.match(/^data:(image\/\w+);base64,/);
+            if (mimeMatch) contentType = mimeMatch[1];
+            const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
             buffer = Buffer.from(base64Data, 'base64');
+        } else if (imageData instanceof ArrayBuffer || Buffer.isBuffer(imageData)) {
+            buffer = Buffer.from(imageData);
         } else {
-            throw new Error('Invalid image data format');
+            console.error('❌ R2: Unsupported imageData type:', typeof imageData);
+            return { success: false, error: 'Unsupported image data format' };
         }
+        
+        console.log(`📤 R2 uploading: ${filename} (${(buffer.length / 1024).toFixed(1)}KB, ${contentType})`);
         
         // Upload to R2
         const command = new PutObjectCommand({
             Bucket: R2_CONFIG.bucketName,
             Key: filename,
             Body: buffer,
-            ContentType: 'image/png'
+            ContentType: contentType
         });
         
         await s3Client.send(command);
@@ -392,10 +399,10 @@ function startBiRefNetServer() {
     if (birefnetServer) return;
     
     const { spawn } = require('child_process');
-    const scriptPath = path.join(__dirname, 'birefnet_server_onnx.py');
+    const scriptPath = path.join(__dirname, 'birefnet_server.py');
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
-    console.log('Starting BiRefNet ONNX Server (fast loading)...');
+    console.log('Starting BiRefNet Python server...');
     
     birefnetServer = spawn(pythonCmd, [scriptPath], {
         cwd: __dirname,

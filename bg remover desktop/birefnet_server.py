@@ -6,6 +6,13 @@ Keeps model loaded in memory for fast repeated processing
 """
 import sys
 import os
+
+# Suppress noisy tqdm progress bars and warnings BEFORE any imports
+os.environ['TQDM_DISABLE'] = '1'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+
 import json
 import base64
 import io
@@ -23,10 +30,20 @@ class BiRefNetServer:
     def load_model(self):
         """Load model once at startup"""
         try:
+            sys.stderr.write("Loading AI model (cached locally)...\n")
+            sys.stderr.flush()
+            load_start = time.time()
+            
             from birefnet_model import BiRefNetLite
             self.model = BiRefNetLite()
+            
+            load_time = time.time() - load_start
+            sys.stderr.write(f"✅ BiRefNet server ready ({load_time:.1f}s)\n")
+            sys.stderr.flush()
             print(json.dumps({"status": "ready", "message": "Model loaded"}), flush=True)
         except Exception as e:
+            sys.stderr.write(f"❌ Model load failed: {e}\n")
+            sys.stderr.flush()
             print(json.dumps({"status": "error", "error": str(e)}), flush=True)
             sys.exit(1)
     
