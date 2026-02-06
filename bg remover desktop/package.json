@@ -39,16 +39,12 @@
     ],
     "extraResources": [
       {
-        "from": "birefnet_server.py",
-        "to": "birefnet_server.py"
+        "from": "birefnet_server_onnx.py",
+        "to": "birefnet_server_onnx.py"
       },
       {
-        "from": "../birefnet_model.py",
-        "to": "birefnet_model.py"
-      },
-      {
-        "from": "../birefnet_pytorch.py",
-        "to": "birefnet_pytorch.py"
+        "from": "birefnet_lite.onnx",
+        "to": "birefnet_lite.onnx"
       }
     ],
     "win": {
