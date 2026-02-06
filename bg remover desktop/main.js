@@ -232,7 +232,7 @@ const R2_CONFIG = {
 };
 
 // R2 upload handler
-ipcMain.handle('upload-to-r2', async (event, { imageData, filename }) => {
+ipcMain.handle('upload-to-r2', async (event, { base64Data, filename }) => {
     try {
         // Check if R2 is configured
         if (!R2_CONFIG.endpoint || !R2_CONFIG.accessKeyId || !R2_CONFIG.secretAccessKey || !R2_CONFIG.bucketName) {
@@ -253,15 +253,15 @@ ipcMain.handle('upload-to-r2', async (event, { imageData, filename }) => {
             }
         });
         
-        // Convert blob/base64 to buffer
+        // Convert base64 data URL to buffer
         let buffer;
-        if (typeof imageData === 'string' && imageData.startsWith('data:')) {
-            const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
+        if (typeof base64Data === 'string' && base64Data.startsWith('data:')) {
+            const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, '');
+            buffer = Buffer.from(base64Content, 'base64');
+        } else if (typeof base64Data === 'string') {
             buffer = Buffer.from(base64Data, 'base64');
-        } else if (imageData instanceof ArrayBuffer) {
-            buffer = Buffer.from(imageData);
         } else {
-            buffer = Buffer.from(await imageData.arrayBuffer());
+            throw new Error('Invalid image data format');
         }
         
         // Upload to R2
