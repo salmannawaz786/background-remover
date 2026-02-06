@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 import os
 from concurrent.futures import ThreadPoolExecutor
 import time
-from functools import lru_cache, wraps
+from functools import wraps
 import gc
 import psutil
 from threading import Timer
@@ -103,7 +103,7 @@ CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST"], allow_he
 # Configure upload folder and allowed extensions
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
+MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15MB (actual limits enforced in route handler)
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -115,11 +115,11 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 MAX_MEMORY_PERCENT = 92
 memory_warning_issued = False
 
-# Thread pool - Optimized for BiRefNet-Lite
+# Thread pool - CPU-safe: executor handles compute, waitress handles I/O
 cpu_count = psutil.cpu_count(logical=False) or 2
-max_workers = int(os.getenv('MAX_WORKERS', max(2, min(cpu_count, 4))))
+max_workers = max(1, cpu_count - 1)  # Leave 1 core for web I/O
 executor = ThreadPoolExecutor(max_workers=max_workers)
-logger.info(f"Initialized thread pool with {executor._max_workers} workers")
+logger.info(f"Initialized thread pool with {max_workers} workers (physical cores: {cpu_count})")
 
 # Load BiRefNet-Lite model - FAST & HIGH QUALITY
 try:
@@ -155,8 +155,8 @@ def require_auth(f):
     
     return decorated_function
 
-def process_image(image_path, hd_quality=False):
-    """Process image with BiRefNet-Lite - optimized for speed and quality"""
+def process_image(image_path, hd_quality=False, output_format='webp'):
+    """Process image with BiRefNet-Lite - let model handle all resizing internally"""
     start_time = time.time()
     
     try:
@@ -174,34 +174,13 @@ def process_image(image_path, hd_quality=False):
             raise ValueError("Processing model not ready. Please refresh and try again.")
         
         with Image.open(image_path) as input_image:
-            original_size = input_image.size
-            
-            if hd_quality:
-                # HD: Minimal resize, maximum quality
-                # BiRefNet-Lite can handle larger images efficiently
-                max_size = 4096
-                compress_level = 0
-                logger.info(f"Processing in HD quality mode - BiRefNet-Lite")
-            else:
-                # Standard: Good balance for free tier
-                max_size = 2048
-                compress_level = 3
-            
-            # Resize if needed (BiRefNet-Lite is efficient, can handle larger images)
-            if max(input_image.size) > max_size:
-                ratio = max_size / max(input_image.size)
-                new_size = tuple(int(dim * ratio) for dim in input_image.size)
-                input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
-                logger.info(f"Resized from {original_size} to {input_image.size}")
-            else:
-                logger.info(f"Processing at original size: {original_size}")
-            
-            # Convert to RGB if needed
+            # Convert to RGB if needed - model handles all resizing internally
             if input_image.mode != 'RGB':
                 input_image = input_image.convert('RGB')
             
-            # Process with BiRefNet-Lite
-            # HD mode = 512px (better quality, ~8-9s) | Speed mode = 320px (~3-4s)
+            logger.info(f"Processing {input_image.size} in {'HD' if hd_quality else 'Speed'} mode")
+            
+            # Process with BiRefNet-Lite (no pre-resize - model handles it)
             output_image = birefnet_model.remove_background(
                 input_image,
                 return_mask=False,
@@ -209,13 +188,15 @@ def process_image(image_path, hd_quality=False):
                 hd_mode=hd_quality
             )
             
-            # Save with appropriate compression
+            # Save with chosen format
             img_io = io.BytesIO()
-            if hd_quality:
-                # HD: Save without compression to preserve quality
-                output_image.save(img_io, 'PNG', compress_level=0)
+            if output_format == 'png':
+                output_image.save(img_io, 'PNG', compress_level=3)
+                mimetype = 'image/png'
             else:
-                output_image.save(img_io, 'PNG', optimize=True, compress_level=compress_level)
+                # WEBP: 30-50% faster save, smaller file, same visual quality
+                output_image.save(img_io, 'WEBP', quality=95, method=4, lossless=True)
+                mimetype = 'image/webp'
             img_io.seek(0)
             
             # Cleanup
@@ -224,9 +205,9 @@ def process_image(image_path, hd_quality=False):
             gc.collect()
             
             processing_time = time.time() - start_time
-            logger.info(f"BiRefNet-Lite processed in {processing_time:.2f}s (HD: {hd_quality})")
+            logger.info(f"Processed in {processing_time:.2f}s ({output_format.upper()}, HD: {hd_quality})")
             
-            return img_io, processing_time
+            return img_io, processing_time, mimetype
             
     except MemoryError as e:
         gc.collect()
@@ -240,10 +221,6 @@ def process_image(image_path, hd_quality=False):
             birefnet_model.clear_cache()
         raise
 
-# Cache processed images
-CACHE_SIZE = 32
-processed_images = lru_cache(maxsize=CACHE_SIZE)(process_image)
-
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -254,8 +231,7 @@ def check_memory_usage():
         percent_used = memory.percent
         
         if percent_used > MAX_MEMORY_PERCENT and not memory_warning_issued:
-            logger.warning(f"Memory critical: {percent_used}%. Clearing cache...")
-            processed_images.cache_clear()
+            logger.warning(f"Memory critical: {percent_used}%. Clearing...")
             gc.collect()
             memory_warning_issued = True
         elif percent_used < MAX_MEMORY_PERCENT - 10:
@@ -382,6 +358,11 @@ def upload_image():
         # HD quality check (Speed/HD mode - available to all users)
         hd_quality = request.form.get('hd_quality', 'false').lower() == 'true'
         
+        # Output format (webp default, png optional)
+        output_format = request.form.get('format', 'webp').lower()
+        if output_format not in ('png', 'webp'):
+            output_format = 'webp'
+        
         # File size limits
         max_size_free = 5 * 1024 * 1024  # 5MB for free users
         max_size_premium = 10 * 1024 * 1024  # 10MB for authenticated users
@@ -422,8 +403,8 @@ def upload_image():
         
         try:
             # Process image with quality setting
-            future = executor.submit(process_image, filepath, hd_quality)
-            img_io, processing_time = future.result(timeout=60 if hd_quality else 30)
+            future = executor.submit(process_image, filepath, hd_quality, output_format)
+            img_io, processing_time, mimetype = future.result(timeout=60 if hd_quality else 30)
             
             # Copy image bytes for R2 upload (so we can send response immediately)
             img_io.seek(0)
@@ -437,7 +418,7 @@ def upload_image():
                             Bucket=R2_BUCKET_NAME,
                             Key=r2_key,
                             Body=img_bytes,
-                            ContentType='image/png'
+                            ContentType=mimetype
                         )
                         public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
                         if public_domain:
@@ -455,7 +436,7 @@ def upload_image():
             
             # Send response immediately (don't wait for R2)
             response_io = io.BytesIO(image_bytes)
-            response = send_file(response_io, mimetype='image/png')
+            response = send_file(response_io, mimetype=mimetype)
             response.headers['X-Processing-Time'] = str(processing_time)
             
             return response
@@ -505,7 +486,10 @@ def health():
 # Error handlers
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({'error': 'File too large (max 10MB)'}), 413
+    return jsonify({
+        'error': 'File is too large! Maximum upload size is 10MB for signed-in users, 5MB for free users. Please reduce the file size and try again.',
+        'maxSize': '10MB'
+    }), 413
 
 @app.errorhandler(500)
 def internal_error(error):
@@ -536,4 +520,4 @@ if __name__ == '__main__':
     logger.info(f"Model: BiRefNet-Lite, Workers: {max_workers}")
     
     from waitress import serve
-    serve(app, host="0.0.0.0", port=5000, threads=4)
+    serve(app, host="0.0.0.0", port=5000, threads=2)  # 2 I/O threads, executor handles compute

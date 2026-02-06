@@ -556,6 +556,7 @@
                             <span>Processing...</span>
                         </div>
                         <div class="image-status"></div>
+                        <button class="card-download-btn" style="display:none;" title="Download">⬇</button>
                     </div>
                     <button class="remove-image">&times;</button>
                 `;
@@ -616,6 +617,21 @@
                             card.querySelector('img').src = objectURL;
                             card.classList.add('processed');
                             if (statusEl) statusEl.innerHTML = '<span class="status-success">✓</span>';
+                            
+                            // Show per-image download button on hover
+                            const dlBtn = card.querySelector('.card-download-btn');
+                            if (dlBtn) {
+                                dlBtn.style.display = '';
+                                dlBtn.addEventListener('click', (e) => {
+                                    e.stopPropagation();
+                                    const link = document.createElement('a');
+                                    link.href = objectURL;
+                                    link.download = `bg-removed-${i + 1}.webp`;
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                });
+                            }
                         }
                     } else {
                         processedImages.push(null);

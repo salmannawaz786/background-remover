@@ -67,14 +67,31 @@ class BiRefNetPyTorch:
                 self._input_size = 512  # 512 for quality on CPU (accept 6-7s instead of 3s)
                 logger.info(f"Using CPU with {optimal_threads} threads (input: {self._input_size}x{self._input_size})")
             
-            # Load model
+            # Load model with local caching
             from transformers import AutoModelForImageSegmentation
             
+            # Cache model locally to avoid slow HuggingFace HEAD requests on restart
+            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.model_cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            
             logger.info("Loading BiRefNet-Lite model...")
-            self._model = AutoModelForImageSegmentation.from_pretrained(
-                'ZhengPeng7/BiRefNet_lite',
-                trust_remote_code=True
-            )
+            try:
+                # Try loading from local cache first (instant, no network)
+                self._model = AutoModelForImageSegmentation.from_pretrained(
+                    'ZhengPeng7/BiRefNet_lite',
+                    trust_remote_code=True,
+                    cache_dir=cache_dir,
+                    local_files_only=True
+                )
+                logger.info("Loaded model from local cache (no network)")
+            except Exception:
+                # First run: download and cache
+                logger.info("Downloading model (first run only)...")
+                self._model = AutoModelForImageSegmentation.from_pretrained(
+                    'ZhengPeng7/BiRefNet_lite',
+                    trust_remote_code=True,
+                    cache_dir=cache_dir
+                )
             
             self._model.to(self._device)
             self._model.eval()
@@ -84,16 +101,17 @@ class BiRefNetPyTorch:
                 self._model = self._model.half()
                 logger.info("Enabled FP16 for GPU")
             
-            # Warmup BOTH resolutions for instant switching
-            logger.info("Warming up model (both Speed & HD modes)...")
-            for size in [self.SPEED_SIZE, self.HD_SIZE]:
-                dummy = torch.randn(1, 3, size, size, device=self._device)
-                if self._device.type == 'cuda':
-                    dummy = dummy.half()
-                with torch.inference_mode():
-                    _ = self._model(dummy)
+            # Warmup Speed mode only on startup (HD warms up on first use)
+            logger.info("Warming up model (Speed mode)...")
+            dummy = torch.randn(1, 3, self.SPEED_SIZE, self.SPEED_SIZE, device=self._device)
+            if self._device.type == 'cuda':
+                dummy = dummy.half()
+            with torch.inference_mode():
+                _ = self._model(dummy)
+            del dummy
             
-            logger.info(f"BiRefNet-Lite ready! Speed: {self.SPEED_SIZE}px | HD: {self.HD_SIZE}px")
+            self._hd_warmed_up = False
+            logger.info(f"BiRefNet-Lite ready! Speed: {self.SPEED_SIZE}px | HD: {self.HD_SIZE}px (lazy warmup)")
             
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
@@ -134,6 +152,17 @@ class BiRefNetPyTorch:
             
             # Select resolution based on mode
             input_size = self.HD_SIZE if hd_mode else self.SPEED_SIZE
+            
+            # Lazy warmup HD on first use
+            if hd_mode and not self._hd_warmed_up:
+                logger.info("Warming up HD mode (first use)...")
+                dummy = torch.randn(1, 3, self.HD_SIZE, self.HD_SIZE, device=self._device)
+                if self._device.type == 'cuda':
+                    dummy = dummy.half()
+                _ = self._model(dummy)
+                del dummy
+                self._hd_warmed_up = True
+                logger.info("HD warmup complete")
             mode_name = "HD" if hd_mode else "Speed"
             
             # Ensure RGB

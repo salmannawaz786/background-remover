@@ -4,6 +4,7 @@
 *.onnx
 *.ckpt
 birefnet_lite_traced.pt
+.model_cache/
 
 # Embedded repositories
 beauty-rating/

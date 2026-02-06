@@ -399,6 +399,35 @@ function getResourcePath() {
     }
 }
 
+// Resize large images to prevent OOM crashes (returns temp file path or original)
+async function resizeIfNeeded(filePath, maxDimension = 4096) {
+    try {
+        const sharp = require('sharp');
+        const metadata = await sharp(filePath).metadata();
+        
+        if (!metadata.width || !metadata.height) return filePath;
+        
+        const maxDim = Math.max(metadata.width, metadata.height);
+        if (maxDim <= maxDimension) return filePath;
+        
+        // Resize to temp file
+        const os = require('os');
+        const tempPath = path.join(os.tmpdir(), `bg-remover-resized-${Date.now()}.png`);
+        
+        await sharp(filePath)
+            .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+            .png()
+            .toFile(tempPath);
+        
+        console.log(`Resized ${metadata.width}x${metadata.height} -> ${maxDimension}px max for processing`);
+        return tempPath;
+    } catch (e) {
+        // sharp not available or error - continue with original
+        console.log('Resize check skipped:', e.message);
+        return filePath;
+    }
+}
+
 // Handle background removal using file path directly (non-blocking)
 // Supports hdMode: true (high quality) or false (speed mode)
 ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
@@ -410,16 +439,31 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
     isProcessing = true;
     const startTime = Date.now();
     const modeName = hdMode ? 'HD' : 'Speed';
+    let tempFilePath = null;
     
     try {
         const { removeBackground } = await import('@imgly/background-removal-node');
         
-        console.log(`[${modeName}] Processing image:`, filePath);
+        // Check file size and resize if very large to prevent OOM
+        const fileStats = fs.statSync(filePath);
+        const fileSizeMB = fileStats.size / (1024 * 1024);
+        console.log(`[${modeName}] Processing image: ${filePath} (${fileSizeMB.toFixed(1)}MB)`);
         console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform, '| Arch:', deviceInfo.arch);
+        
+        // For files > 8MB, resize down to prevent memory crashes
+        let processPath = filePath;
+        if (fileSizeMB > 8) {
+            const maxDim = hdMode ? 3000 : 2000;
+            processPath = await resizeIfNeeded(filePath, maxDim);
+            if (processPath !== filePath) {
+                tempFilePath = processPath;
+                console.log(`Large file (${fileSizeMB.toFixed(1)}MB) - resized for safe processing`);
+            }
+        }
         
         // Convert Windows path to file:// URL format
         const { pathToFileURL } = require('url');
-        const fileURL = pathToFileURL(filePath).href;
+        const fileURL = pathToFileURL(processPath).href;
         
         // Get resource path based on environment
         const resourcePath = getResourcePath();
@@ -482,6 +526,19 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
             global.gc();
         }
         
-        return { success: false, error: error.message };
+        // User-friendly error messages
+        let userError = error.message;
+        if (error.message.includes('memory') || error.message.includes('OOM') || error.message.includes('allocation')) {
+            userError = 'Image is too large for available memory. Try a smaller image or close other apps.';
+        } else if (error.message.includes('timeout')) {
+            userError = 'Processing took too long. Try Speed mode or a smaller image.';
+        }
+        
+        return { success: false, error: userError };
+    } finally {
+        // Clean up temp file if we created one
+        if (tempFilePath) {
+            try { fs.unlinkSync(tempFilePath); } catch (e) {}
+        }
     }
 });
