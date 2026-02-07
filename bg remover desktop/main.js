@@ -399,10 +399,10 @@ function startBiRefNetServer() {
     if (birefnetServer) return;
     
     const { spawn } = require('child_process');
-    const scriptPath = path.join(__dirname, 'birefnet_server_onnx.py');
+    const scriptPath = path.join(__dirname, 'birefnet_server_ts.py');
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
-    console.log('Starting BiRefNet ONNX server...');
+    console.log('Starting BiRefNet TorchScript server...');
     
     birefnetServer = spawn(pythonCmd, [scriptPath], {
         cwd: __dirname,
