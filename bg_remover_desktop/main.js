@@ -481,27 +481,32 @@ function startBiRefNetServer() {
     });
     
     birefnetServer.stderr.on('data', (data) => {
-        const text = data.toString().trim();
-        // Parse download progress messages from Python
-        for (const line of text.split('\n')) {
+        const text = data.toString();
+        // Split on both \n and \r to handle tqdm-style output
+        for (const line of text.split(/[\r\n]+/)) {
             const trimmed = line.trim();
+            if (!trimmed) continue;
+            
             if (trimmed === 'DOWNLOAD_START') {
                 console.log('📥 Model download started (first run)');
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', { status: 'start', percent: 0 });
+                    mainWindow.webContents.send('model-download-progress', { status: 'start', percent: 0, mbDone: 0, mbTotal: 0 });
                 }
             } else if (trimmed.startsWith('DOWNLOAD_PROGRESS:')) {
-                const pct = parseInt(trimmed.split(':')[1], 10);
-                console.log(`📥 Model download: ${pct}%`);
+                const parts = trimmed.split(':');
+                const pct = parseInt(parts[1], 10);
+                const mbDone = parts[2] ? parseInt(parts[2], 10) : 0;
+                const mbTotal = parts[3] ? parseInt(parts[3], 10) : 0;
+                console.log(`📥 Model download: ${pct}% (${mbDone}/${mbTotal} MB)`);
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', { status: 'downloading', percent: pct });
+                    mainWindow.webContents.send('model-download-progress', { status: 'downloading', percent: pct, mbDone, mbTotal });
                 }
             } else if (trimmed === 'DOWNLOAD_DONE') {
                 console.log('✅ Model download complete');
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('model-download-progress', { status: 'done', percent: 100 });
                 }
-            } else if (trimmed) {
+            } else {
                 console.log('[Python stderr]', trimmed);
             }
         }

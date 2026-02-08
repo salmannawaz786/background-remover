@@ -494,7 +494,8 @@ window.electronAPI.onModelDownloadProgress((data) => {
         progressContainer.style.display = 'block';
         loadingText.textContent = 'Downloading AI Model...';
         progressFill.style.width = data.percent + '%';
-        progressText.textContent = `Downloading AI model... ${data.percent}%`;
+        const mbInfo = data.mbTotal > 0 ? ` (${data.mbDone} / ${data.mbTotal} MB)` : '';
+        progressText.textContent = `Downloading AI model... ${data.percent}%${mbInfo}`;
     } else if (data.status === 'done') {
         progressFill.style.width = '100%';
         progressText.textContent = 'Download complete! Loading model...';

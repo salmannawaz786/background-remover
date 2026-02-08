@@ -136,80 +136,94 @@ class BiRefNetPyTorch:
             raise
     
     def _download_model_with_progress(self, cache_dir):
-        """Download model files with progress reporting via stderr"""
+        """Download model with real byte-level progress reporting via stderr"""
+        import threading
+        
+        repo_id = 'ZhengPeng7/BiRefNet_lite'
+        
+        # Get expected total size from HuggingFace API
+        total_bytes = 170 * 1024 * 1024  # fallback: ~170MB
         try:
-            from huggingface_hub import snapshot_download, list_repo_files
-            import functools
-            
-            repo_id = 'ZhengPeng7/BiRefNet_lite'
-            
-            # Get total files to estimate progress
+            from huggingface_hub import HfApi
+            api = HfApi()
+            info = api.repo_info(repo_id, files_metadata=True)
+            api_total = sum((s.size or 0) for s in info.siblings)
+            if api_total > 0:
+                total_bytes = api_total
+        except Exception:
+            pass
+        
+        # Measure initial cache size
+        def get_dir_size(path):
+            total = 0
             try:
-                files = list_repo_files(repo_id)
-                total_files = len(files)
+                for root, dirs, files in os.walk(path):
+                    for f in files:
+                        try:
+                            total += os.path.getsize(os.path.join(root, f))
+                        except OSError:
+                            pass
             except Exception:
-                total_files = 10  # fallback estimate
-            
-            downloaded_count = [0]
-            
-            # Use tqdm callback wrapper
-            class ProgressCallback:
-                """Reports download progress via stderr"""
-                def __init__(self, total):
-                    self.total = total
-                    self.current = 0
-                
-                def __call__(self, *args, **kwargs):
+                pass
+            return total
+        
+        initial_size = get_dir_size(cache_dir)
+        download_done = threading.Event()
+        download_error = [None]
+        
+        def do_download():
+            try:
+                from huggingface_hub import snapshot_download
+                snapshot_download(
+                    repo_id,
+                    cache_dir=cache_dir,
+                    local_files_only=False
+                )
+            except Exception as e:
+                download_error[0] = e
+            finally:
+                download_done.set()
+        
+        def monitor():
+            last_pct = -1
+            while not download_done.is_set():
+                try:
+                    current_size = get_dir_size(cache_dir) - initial_size
+                    pct = min(99, int(current_size * 100 / max(total_bytes, 1)))
+                    if pct != last_pct:
+                        mb_done = current_size / (1024 * 1024)
+                        mb_total = total_bytes / (1024 * 1024)
+                        sys.stderr.write(f"DOWNLOAD_PROGRESS:{pct}:{mb_done:.0f}:{mb_total:.0f}\n")
+                        sys.stderr.flush()
+                        last_pct = pct
+                except Exception:
                     pass
-            
-            # Download with snapshot_download which handles everything
-            # We'll monitor file appearance in cache_dir for progress
-            import threading
-            
-            download_complete = threading.Event()
-            
-            def monitor_progress():
-                """Monitor cache dir for new files to estimate progress"""
-                import time as _time
-                last_pct = -1
-                while not download_complete.is_set():
-                    try:
-                        file_count = sum(1 for _, _, files in os.walk(cache_dir) for f in files)
-                        # Estimate: model has ~10 files, safetensors is the big one
-                        pct = min(95, int(file_count / max(total_files, 1) * 100))
-                        if pct != last_pct:
-                            sys.stderr.write(f"DOWNLOAD_PROGRESS:{pct}\n")
-                            sys.stderr.flush()
-                            last_pct = pct
-                    except Exception:
-                        pass
-                    download_complete.wait(timeout=1.0)
-            
-            monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
-            monitor_thread.start()
-            
-            snapshot_download(
-                repo_id,
-                cache_dir=cache_dir,
-                local_files_only=False
-            )
-            
-            download_complete.set()
-            monitor_thread.join(timeout=2)
-            
-            sys.stderr.write("DOWNLOAD_PROGRESS:100\n")
-            sys.stderr.flush()
-            logger.info("Model download complete")
-            
-        except Exception as e:
-            logger.error(f"Download with progress failed: {e}")
-            # Fallback: download without progress
+                download_done.wait(timeout=0.5)
+        
+        dl_thread = threading.Thread(target=do_download, daemon=True)
+        mon_thread = threading.Thread(target=monitor, daemon=True)
+        
+        dl_thread.start()
+        mon_thread.start()
+        
+        dl_thread.join()
+        download_done.set()
+        mon_thread.join(timeout=2)
+        
+        if download_error[0]:
+            logger.error(f"Download failed: {download_error[0]}")
+            # Fallback: direct download without progress
             from transformers import AutoModelForImageSegmentation
             self._model = AutoModelForImageSegmentation.from_pretrained(
                 'ZhengPeng7/BiRefNet_lite',
                 trust_remote_code=True,
                 cache_dir=cache_dir
             )
+            return
+        
+        sys.stderr.write("DOWNLOAD_PROGRESS:100\n")
+        sys.stderr.flush()
+        logger.info("Model download complete")
     
     def _preprocess_cv2(self, image, input_size):
         """Ultra-fast preprocessing with OpenCV"""
