@@ -28,6 +28,37 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
+      - name: Pre-download model and resolve symlinks
+        working-directory: ./bg_remover_desktop
+        shell: python
+        run: |
+          import os, shutil
+          from transformers import AutoModelForImageSegmentation
+          # Download model to a temp cache
+          tmp_cache = os.path.join('.', '_tmp_model_cache')
+          os.makedirs(tmp_cache, exist_ok=True)
+          print('Downloading BiRefNet_lite model...')
+          model = AutoModelForImageSegmentation.from_pretrained(
+              'ZhengPeng7/BiRefNet_lite',
+              trust_remote_code=True,
+              cache_dir=tmp_cache
+          )
+          del model
+          print('Model downloaded.')
+          # Copy with symlinks resolved (dereferenced) to avoid 7-Zip crash
+          resolved_cache = os.path.join('.', 'model_cache')
+          if os.path.exists(resolved_cache):
+              shutil.rmtree(resolved_cache)
+          shutil.copytree(tmp_cache, resolved_cache, symlinks=False)
+          shutil.rmtree(tmp_cache)
+          # Verify
+          total_size = sum(
+              os.path.getsize(os.path.join(dp, f))
+              for dp, dn, filenames in os.walk(resolved_cache)
+              for f in filenames
+          )
+          print(f'Model cache ready: {total_size / 1024 / 1024:.1f} MB (symlinks resolved)')
+
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
@@ -38,6 +69,7 @@ jobs:
               '--name', 'birefnet_server',
               '--onedir', '--noconfirm', '--clean',
               '--paths', '..',
+              '--add-data', 'model_cache;model_cache',
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
@@ -154,6 +186,34 @@ jobs:
           pip install torch torchvision
           pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
+      - name: Pre-download model and resolve symlinks
+        working-directory: ./bg_remover_desktop
+        shell: python
+        run: |
+          import os, shutil
+          from transformers import AutoModelForImageSegmentation
+          tmp_cache = os.path.join('.', '_tmp_model_cache')
+          os.makedirs(tmp_cache, exist_ok=True)
+          print('Downloading BiRefNet_lite model...')
+          model = AutoModelForImageSegmentation.from_pretrained(
+              'ZhengPeng7/BiRefNet_lite',
+              trust_remote_code=True,
+              cache_dir=tmp_cache
+          )
+          del model
+          print('Model downloaded.')
+          resolved_cache = os.path.join('.', 'model_cache')
+          if os.path.exists(resolved_cache):
+              shutil.rmtree(resolved_cache)
+          shutil.copytree(tmp_cache, resolved_cache, symlinks=False)
+          shutil.rmtree(tmp_cache)
+          total_size = sum(
+              os.path.getsize(os.path.join(dp, f))
+              for dp, dn, filenames in os.walk(resolved_cache)
+              for f in filenames
+          )
+          print(f'Model cache ready: {total_size / 1024 / 1024:.1f} MB (symlinks resolved)')
+
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
@@ -164,6 +224,7 @@ jobs:
               '--name', 'birefnet_server',
               '--onedir', '--noconfirm', '--clean',
               '--paths', '..',
+              '--add-data', 'model_cache:model_cache',
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
