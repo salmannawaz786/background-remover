@@ -6,6 +6,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   publish-windows:
     runs-on: windows-latest
@@ -25,23 +28,6 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
-      - name: Pre-download BiRefNet model
-        working-directory: ./bg_remover_desktop
-        shell: python
-        run: |
-          from transformers import AutoModelForImageSegmentation
-          import os
-          cache_dir = os.path.join('.', 'model_cache')
-          os.makedirs(cache_dir, exist_ok=True)
-          print('Downloading BiRefNet_lite model...')
-          model = AutoModelForImageSegmentation.from_pretrained(
-              'ZhengPeng7/BiRefNet_lite',
-              trust_remote_code=True,
-              cache_dir=cache_dir
-          )
-          print('Model downloaded successfully!')
-          print(f'Cache dir contents: {os.listdir(cache_dir)}')
-
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
@@ -52,7 +38,6 @@ jobs:
               '--name', 'birefnet_server',
               '--onedir', '--noconfirm', '--clean',
               '--paths', '..',
-              '--add-data', 'model_cache;model_cache',
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
@@ -72,9 +57,8 @@ jobs:
               '--collect-binaries', 'torch',
               'birefnet_server.py'
           ]
-          print('Running:', ' '.join(cmd))
+          print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
-          # Verify output
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
@@ -87,11 +71,8 @@ jobs:
       - name: Move PyInstaller output to python-dist
         working-directory: ./bg_remover_desktop
         run: |
-          Write-Host "Checking dist folder..."
-          Get-ChildItem dist -ErrorAction SilentlyContinue | Format-Table Name, Length
           if (-not (Test-Path "dist/birefnet_server")) {
             Write-Host "ERROR: dist/birefnet_server not found!"
-            Get-ChildItem dist -Recurse -Depth 1 -ErrorAction SilentlyContinue
             exit 1
           }
           if (Test-Path python-dist) { Remove-Item -Recurse -Force python-dist }
@@ -173,23 +154,6 @@ jobs:
           pip install torch torchvision
           pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
-      - name: Pre-download BiRefNet model
-        working-directory: ./bg_remover_desktop
-        shell: python
-        run: |
-          from transformers import AutoModelForImageSegmentation
-          import os
-          cache_dir = os.path.join('.', 'model_cache')
-          os.makedirs(cache_dir, exist_ok=True)
-          print('Downloading BiRefNet_lite model...')
-          model = AutoModelForImageSegmentation.from_pretrained(
-              'ZhengPeng7/BiRefNet_lite',
-              trust_remote_code=True,
-              cache_dir=cache_dir
-          )
-          print('Model downloaded successfully!')
-          print(f'Cache dir contents: {os.listdir(cache_dir)}')
-
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
@@ -200,7 +164,6 @@ jobs:
               '--name', 'birefnet_server',
               '--onedir', '--noconfirm', '--clean',
               '--paths', '..',
-              '--add-data', 'model_cache:model_cache',
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
@@ -220,9 +183,8 @@ jobs:
               '--collect-binaries', 'torch',
               'birefnet_server.py'
           ]
-          print('Running:', ' '.join(cmd))
+          print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
-          # Verify output
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
@@ -235,11 +197,8 @@ jobs:
       - name: Move PyInstaller output to python-dist
         working-directory: ./bg_remover_desktop
         run: |
-          echo "Checking dist folder..."
-          ls -la dist/
           if [ ! -d "dist/birefnet_server" ]; then
             echo "ERROR: dist/birefnet_server not found!"
-            ls -laR dist/ || true
             exit 1
           fi
           rm -rf python-dist
