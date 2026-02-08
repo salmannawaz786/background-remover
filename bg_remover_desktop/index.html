@@ -13,7 +13,15 @@
     <div class="splash-screen" id="splashScreen">
         <div class="splash-content">
             <div class="splash-lottie" id="splashLottie"></div>
-            <p class="splash-loading-text">Loading AI Engine...</p>
+            <p class="splash-loading-text" id="splashLoadingText">Loading AI Engine...</p>
+            <!-- Download progress (shown only on first run when model downloads) -->
+            <div class="splash-download-progress" id="splashDownloadProgress" style="display: none;">
+                <div class="splash-progress-bar">
+                    <div class="splash-progress-fill" id="splashProgressFill"></div>
+                </div>
+                <p class="splash-progress-text" id="splashProgressText">Downloading AI model... 0%</p>
+                <p class="splash-progress-hint">One-time download (~45 MB) — won't happen again</p>
+            </div>
             <div class="splash-tip-row" id="splashTipRow">
                 <span class="splash-bulb">💡</span>
                 <div class="splash-tip-content" id="splashTipContent"></div>

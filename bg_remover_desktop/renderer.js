@@ -476,6 +476,32 @@ function tryHideSplash() {
     }, 500);
 }
 
+// Listen for model download progress (first run only)
+window.electronAPI.onModelDownloadProgress((data) => {
+    const progressContainer = document.getElementById('splashDownloadProgress');
+    const progressFill = document.getElementById('splashProgressFill');
+    const progressText = document.getElementById('splashProgressText');
+    const loadingText = document.getElementById('splashLoadingText');
+    
+    if (!progressContainer) return;
+    
+    if (data.status === 'start') {
+        progressContainer.style.display = 'block';
+        loadingText.textContent = 'Downloading AI Model...';
+        progressFill.style.width = '0%';
+        progressText.textContent = 'Downloading AI model... 0%';
+    } else if (data.status === 'downloading') {
+        progressContainer.style.display = 'block';
+        loadingText.textContent = 'Downloading AI Model...';
+        progressFill.style.width = data.percent + '%';
+        progressText.textContent = `Downloading AI model... ${data.percent}%`;
+    } else if (data.status === 'done') {
+        progressFill.style.width = '100%';
+        progressText.textContent = 'Download complete! Loading model...';
+        loadingText.textContent = 'Loading AI Engine...';
+    }
+});
+
 // Listen for model-ready from main process
 window.electronAPI.onModelReady(() => {
     console.log('Model ready signal received');

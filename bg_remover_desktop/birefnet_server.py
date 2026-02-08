@@ -7,11 +7,9 @@ Keeps model loaded in memory for fast repeated processing
 import sys
 import os
 
-# Suppress noisy tqdm progress bars and warnings BEFORE any imports
-os.environ['TQDM_DISABLE'] = '1'
+# Suppress noisy warnings BEFORE any imports (keep progress bars for download tracking)
 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
 os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
 
 import json
 import base64

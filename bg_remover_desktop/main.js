@@ -481,7 +481,30 @@ function startBiRefNetServer() {
     });
     
     birefnetServer.stderr.on('data', (data) => {
-        console.log('[Python stderr]', data.toString().trim());
+        const text = data.toString().trim();
+        // Parse download progress messages from Python
+        for (const line of text.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed === 'DOWNLOAD_START') {
+                console.log('📥 Model download started (first run)');
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('model-download-progress', { status: 'start', percent: 0 });
+                }
+            } else if (trimmed.startsWith('DOWNLOAD_PROGRESS:')) {
+                const pct = parseInt(trimmed.split(':')[1], 10);
+                console.log(`📥 Model download: ${pct}%`);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('model-download-progress', { status: 'downloading', percent: pct });
+                }
+            } else if (trimmed === 'DOWNLOAD_DONE') {
+                console.log('✅ Model download complete');
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('model-download-progress', { status: 'done', percent: 100 });
+                }
+            } else if (trimmed) {
+                console.log('[Python stderr]', trimmed);
+            }
+        }
     });
     
     birefnetServer.on('close', (code) => {
@@ -615,9 +638,9 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
         console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform);
         console.log('Using persistent BiRefNet server');
         
-        // Wait for server to be ready (max 60s on first run for model download)
+        // Wait for server to be ready (max 5 min on first run for model download)
         let waitTime = 0;
-        while (!serverReady && waitTime < 60000) {
+        while (!serverReady && waitTime < 300000) {
             await new Promise(r => setTimeout(r, 500));
             waitTime += 500;
         }

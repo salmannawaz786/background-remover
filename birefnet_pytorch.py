@@ -96,13 +96,20 @@ class BiRefNetPyTorch:
                 )
                 logger.info("Loaded model from local cache (no network)")
             except Exception:
-                # First run: download and cache
+                # First run: download with progress reporting
                 logger.info("Downloading model (first run only)...")
+                sys.stderr.write("DOWNLOAD_START\n")
+                sys.stderr.flush()
+                self._download_model_with_progress(cache_dir)
+                # Now load from cache
                 self._model = AutoModelForImageSegmentation.from_pretrained(
                     'ZhengPeng7/BiRefNet_lite',
                     trust_remote_code=True,
-                    cache_dir=cache_dir
+                    cache_dir=cache_dir,
+                    local_files_only=True
                 )
+                sys.stderr.write("DOWNLOAD_DONE\n")
+                sys.stderr.flush()
             
             self._model.to(self._device)
             self._model.eval()
@@ -127,6 +134,82 @@ class BiRefNetPyTorch:
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
             raise
+    
+    def _download_model_with_progress(self, cache_dir):
+        """Download model files with progress reporting via stderr"""
+        try:
+            from huggingface_hub import snapshot_download, list_repo_files
+            import functools
+            
+            repo_id = 'ZhengPeng7/BiRefNet_lite'
+            
+            # Get total files to estimate progress
+            try:
+                files = list_repo_files(repo_id)
+                total_files = len(files)
+            except Exception:
+                total_files = 10  # fallback estimate
+            
+            downloaded_count = [0]
+            
+            # Use tqdm callback wrapper
+            class ProgressCallback:
+                """Reports download progress via stderr"""
+                def __init__(self, total):
+                    self.total = total
+                    self.current = 0
+                
+                def __call__(self, *args, **kwargs):
+                    pass
+            
+            # Download with snapshot_download which handles everything
+            # We'll monitor file appearance in cache_dir for progress
+            import threading
+            
+            download_complete = threading.Event()
+            
+            def monitor_progress():
+                """Monitor cache dir for new files to estimate progress"""
+                import time as _time
+                last_pct = -1
+                while not download_complete.is_set():
+                    try:
+                        file_count = sum(1 for _, _, files in os.walk(cache_dir) for f in files)
+                        # Estimate: model has ~10 files, safetensors is the big one
+                        pct = min(95, int(file_count / max(total_files, 1) * 100))
+                        if pct != last_pct:
+                            sys.stderr.write(f"DOWNLOAD_PROGRESS:{pct}\n")
+                            sys.stderr.flush()
+                            last_pct = pct
+                    except Exception:
+                        pass
+                    download_complete.wait(timeout=1.0)
+            
+            monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+            monitor_thread.start()
+            
+            snapshot_download(
+                repo_id,
+                cache_dir=cache_dir,
+                local_files_only=False
+            )
+            
+            download_complete.set()
+            monitor_thread.join(timeout=2)
+            
+            sys.stderr.write("DOWNLOAD_PROGRESS:100\n")
+            sys.stderr.flush()
+            logger.info("Model download complete")
+            
+        except Exception as e:
+            logger.error(f"Download with progress failed: {e}")
+            # Fallback: download without progress
+            from transformers import AutoModelForImageSegmentation
+            self._model = AutoModelForImageSegmentation.from_pretrained(
+                'ZhengPeng7/BiRefNet_lite',
+                trust_remote_code=True,
+                cache_dir=cache_dir
+            )
     
     def _preprocess_cv2(self, image, input_size):
         """Ultra-fast preprocessing with OpenCV"""

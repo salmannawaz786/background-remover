@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removeBackground: (filePath, hdMode) => ipcRenderer.invoke('remove-background', { filePath, hdMode: hdMode || false }),
     onProgress: (callback) => ipcRenderer.on('processing-progress', (event, data) => callback(data)),
     onModelReady: (callback) => ipcRenderer.on('model-ready', (event, status) => callback(status)),
+    onModelDownloadProgress: (callback) => ipcRenderer.on('model-download-progress', (event, data) => callback(data)),
     getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
     
     // Cloudflare R2 Storage
