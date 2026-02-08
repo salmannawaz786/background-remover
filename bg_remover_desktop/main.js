@@ -104,6 +104,16 @@ function createWindow() {
         Menu.setApplicationMenu(null);
     }
     
+    // Check authentication first to avoid flash
+    const savedUser = store.get('user');
+    const savedToken = store.get('token');
+    const isAuthenticated = !!(savedUser && savedToken);
+    
+    // Restore session
+    if (isAuthenticated) {
+        setCurrentUser(savedUser, savedToken);
+    }
+    
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
@@ -121,8 +131,9 @@ function createWindow() {
         backgroundColor: '#1a1a1a'
     });
 
-    // Check if user needs authentication first
-    mainWindow.loadFile('auth.html');
+    // Load the correct page based on auth state
+    const pageToLoad = isAuthenticated ? 'index.html' : 'auth.html';
+    mainWindow.loadFile(pageToLoad);
     
     // Open DevTools in development
     if (process.argv.includes('--dev')) {
@@ -399,17 +410,46 @@ function startBiRefNetServer() {
     if (birefnetServer) return;
     
     const { spawn } = require('child_process');
-    const scriptPath = path.join(__dirname, 'birefnet_server_ts.py');
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
-    console.log('Starting BiRefNet TorchScript server...');
+    let command, args, cwd, env;
     
-    birefnetServer = spawn(pythonCmd, [scriptPath], {
-        cwd: __dirname,
-        env: {
-            ...process.env,
-            PYTHONPATH: path.dirname(__dirname)
-        },
+    if (app.isPackaged) {
+        // Production: use PyInstaller-bundled executable from extraResources
+        const serverExe = process.platform === 'win32' ? 'birefnet_server.exe' : 'birefnet_server';
+        const serverPath = path.join(process.resourcesPath, 'birefnet_server', serverExe);
+        
+        if (!fs.existsSync(serverPath)) {
+            console.error('❌ Bundled Python server not found at:', serverPath);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('model-ready', 'error');
+            }
+            return;
+        }
+        
+        command = serverPath;
+        args = [];
+        cwd = path.join(process.resourcesPath, 'birefnet_server');
+        env = { ...process.env };
+        
+        // Make executable on macOS/Linux
+        if (process.platform !== 'win32') {
+            try { fs.chmodSync(serverPath, '755'); } catch (e) {}
+        }
+    } else {
+        // Development: use system Python
+        command = process.platform === 'win32' ? 'python' : 'python3';
+        args = [path.join(__dirname, 'birefnet_server.py')];
+        cwd = __dirname;
+        env = { ...process.env, PYTHONPATH: path.dirname(__dirname) };
+    }
+    
+    console.log(`Starting BiRefNet server: ${command} ${args.join(' ')}`);
+    console.log(`  CWD: ${cwd}`);
+    console.log(`  Packaged: ${app.isPackaged}`);
+    
+    birefnetServer = spawn(command, args, {
+        cwd: cwd,
+        env: env,
         stdio: ['pipe', 'pipe', 'pipe']
     });
     
@@ -427,6 +467,10 @@ function startBiRefNetServer() {
                     if (msg.status === 'ready') {
                         serverReady = true;
                         console.log('✅ BiRefNet server ready');
+                        // Notify renderer to hide splash screen
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('model-ready', 'birefnet');
+                        }
                     }
                 } catch (e) {
                     // Not JSON, just log it

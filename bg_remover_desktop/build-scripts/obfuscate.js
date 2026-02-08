@@ -12,7 +12,9 @@ const filesToObfuscate = [
 module.exports = async function(context) {
     const appOutDir = context.appOutDir;
     const resourcesPath = path.join(appOutDir, 'resources');
-    const appPath = path.join(resourcesPath, 'app.asar.unpacked') || path.join(resourcesPath, 'app');
+    const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked');
+    const plainPath = path.join(resourcesPath, 'app');
+    const appPath = fs.existsSync(unpackedPath) ? unpackedPath : plainPath;
     
     console.log('🔐 Obfuscating sensitive files...');
     

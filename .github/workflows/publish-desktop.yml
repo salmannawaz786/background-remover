@@ -1,0 +1,229 @@
+name: Publish Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
+
+      - name: Pre-download BiRefNet model
+        run: |
+          python -c "
+          from transformers import AutoModelForImageSegmentation
+          import os
+          cache_dir = os.path.join('bg_remover_desktop', 'model_cache')
+          os.makedirs(cache_dir, exist_ok=True)
+          print('Downloading BiRefNet_lite model...')
+          model = AutoModelForImageSegmentation.from_pretrained(
+              'ZhengPeng7/BiRefNet_lite',
+              trust_remote_code=True,
+              cache_dir=cache_dir
+          )
+          print('Model downloaded successfully!')
+          "
+
+      - name: Build Python server with PyInstaller
+        working-directory: ./bg_remover_desktop
+        run: |
+          pyinstaller --name birefnet_server --onedir --noconfirm --clean ^
+            --paths .. ^
+            --add-data "model_cache;model_cache" ^
+            --hidden-import birefnet_model ^
+            --hidden-import birefnet_pytorch ^
+            --hidden-import torch ^
+            --hidden-import torchvision ^
+            --hidden-import transformers ^
+            --hidden-import PIL ^
+            --hidden-import numpy ^
+            --hidden-import cv2 ^
+            --hidden-import safetensors ^
+            --hidden-import einops ^
+            --hidden-import kornia ^
+            --hidden-import timm ^
+            --collect-all torch ^
+            --collect-all transformers ^
+            --collect-all safetensors ^
+            --collect-all timm ^
+            birefnet_server.py
+          echo "PyInstaller output:"
+          dir dist\birefnet_server /s /b | find /c /v ""
+        shell: cmd
+
+      - name: Move PyInstaller output to python-dist
+        working-directory: ./bg_remover_desktop
+        run: |
+          if (Test-Path python-dist) { Remove-Item -Recurse -Force python-dist }
+          Move-Item dist/birefnet_server python-dist/birefnet_server
+          Write-Host "Python server bundle size:"
+          $size = (Get-ChildItem -Recurse python-dist | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "$([math]::Round($size, 1)) MB"
+
+      - name: Create .env.production
+        working-directory: ./bg_remover_desktop
+        run: |
+          @"
+          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY=${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY=${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_DOMAIN=${{ secrets.R2_PUBLIC_DOMAIN }}
+          "@ | Out-File -Encoding utf8 .env.production
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: './bg_remover_desktop/package-lock.json'
+
+      - name: Install Node dependencies
+        working-directory: ./bg_remover_desktop
+        run: npm ci
+
+      - name: Copy lottie.min.js to lib
+        working-directory: ./bg_remover_desktop
+        run: |
+          New-Item -ItemType Directory -Force -Path lib
+          Copy-Item node_modules/lottie-web/build/player/lottie.min.js lib/lottie.min.js
+
+      - name: Build and Publish Windows
+        working-directory: ./bg_remover_desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        run: npm run release:win
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: bg_remover_desktop/dist/*.exe
+          if-no-files-found: warn
+
+  publish-macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install torch torchvision
+          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
+
+      - name: Pre-download BiRefNet model
+        run: |
+          python -c "
+          from transformers import AutoModelForImageSegmentation
+          import os
+          cache_dir = os.path.join('bg_remover_desktop', 'model_cache')
+          os.makedirs(cache_dir, exist_ok=True)
+          print('Downloading BiRefNet_lite model...')
+          model = AutoModelForImageSegmentation.from_pretrained(
+              'ZhengPeng7/BiRefNet_lite',
+              trust_remote_code=True,
+              cache_dir=cache_dir
+          )
+          print('Model downloaded successfully!')
+          "
+
+      - name: Build Python server with PyInstaller
+        working-directory: ./bg_remover_desktop
+        run: |
+          pyinstaller --name birefnet_server --onedir --noconfirm --clean \
+            --paths .. \
+            --add-data "model_cache:model_cache" \
+            --hidden-import birefnet_model \
+            --hidden-import birefnet_pytorch \
+            --hidden-import torch \
+            --hidden-import torchvision \
+            --hidden-import transformers \
+            --hidden-import PIL \
+            --hidden-import numpy \
+            --hidden-import cv2 \
+            --hidden-import safetensors \
+            --hidden-import einops \
+            --hidden-import kornia \
+            --hidden-import timm \
+            --collect-all torch \
+            --collect-all transformers \
+            --collect-all safetensors \
+            --collect-all timm \
+            birefnet_server.py
+          echo "PyInstaller output files: $(find dist/birefnet_server -type f | wc -l)"
+
+      - name: Move PyInstaller output to python-dist
+        working-directory: ./bg_remover_desktop
+        run: |
+          rm -rf python-dist
+          mv dist/birefnet_server python-dist/birefnet_server
+          echo "Python server bundle size: $(du -sh python-dist | cut -f1)"
+
+      - name: Create .env.production
+        working-directory: ./bg_remover_desktop
+        run: |
+          cat > .env.production << EOF
+          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY=${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY=${{ secrets.R2_SECRET_KEY }}
+          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
+          R2_PUBLIC_DOMAIN=${{ secrets.R2_PUBLIC_DOMAIN }}
+          EOF
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: './bg_remover_desktop/package-lock.json'
+
+      - name: Install Node dependencies
+        working-directory: ./bg_remover_desktop
+        run: npm ci
+
+      - name: Copy lottie.min.js to lib
+        working-directory: ./bg_remover_desktop
+        run: |
+          mkdir -p lib
+          cp node_modules/lottie-web/build/player/lottie.min.js lib/lottie.min.js
+
+      - name: Build and Publish macOS ARM
+        working-directory: ./bg_remover_desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=8192'
+          npm_config_arch: arm64
+        run: npm run release:mac
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm-installer
+          path: bg_remover_desktop/dist/*.dmg
+          if-no-files-found: warn

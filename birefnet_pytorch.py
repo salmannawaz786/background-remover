@@ -3,6 +3,7 @@
 # Maximum CPU speed with CV2 preprocessing and optimized threading
 
 import os
+import sys
 # Set CPU threading env before importing torch
 _cpu_threads = os.cpu_count() or 4
 os.environ.setdefault("OMP_NUM_THREADS", str(min(_cpu_threads, 8)))
@@ -71,7 +72,17 @@ class BiRefNetPyTorch:
             from transformers import AutoModelForImageSegmentation
             
             # Cache model locally to avoid slow HuggingFace HEAD requests on restart
-            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.model_cache')
+            if getattr(sys, 'frozen', False):
+                # PyInstaller bundle - check for bundled model cache first
+                bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
+                bundled_cache = os.path.join(bundle_dir, 'model_cache')
+                if os.path.exists(bundled_cache):
+                    cache_dir = bundled_cache
+                else:
+                    # Fallback to user home directory for downloaded models
+                    cache_dir = os.path.join(os.path.expanduser('~'), '.sallulabs', 'model_cache')
+            else:
+                cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.model_cache')
             os.makedirs(cache_dir, exist_ok=True)
             
             logger.info("Loading BiRefNet-Lite model...")

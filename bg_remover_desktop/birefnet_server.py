@@ -19,8 +19,9 @@ import io
 import time
 from PIL import Image
 
-# Add parent dir to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent dir to path (skip in PyInstaller frozen mode)
+if not getattr(sys, 'frozen', False):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class BiRefNetServer:
     def __init__(self):

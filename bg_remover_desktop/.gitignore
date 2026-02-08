@@ -1,0 +1,10 @@
+node_modules/
+dist/
+python-dist/
+model_cache/
+*.log
+.DS_Store
+Thumbs.db
+.env.production
+__pycache__/
+*.spec

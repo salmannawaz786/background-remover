@@ -398,3 +398,90 @@ window.electronAPI.onProgress((data) => {
     // Animation handles visual feedback, no text needed
     console.log('Progress:', data.key);
 });
+
+// ===== SPLASH SCREEN =====
+const splashTips = [
+    { title: 'HD vs Speed', text: 'HD mode gives sharper edges but takes longer. Speed mode is great for quick previews!' },
+    { title: 'Batch Processing', text: 'Switch to Multiple Images mode to process many images at once - great for product photos!' },
+    { title: 'Offline Power', text: 'All processing happens locally on your device. No internet needed, your images stay private.' },
+    { title: 'First Run', text: 'The AI model loads once when the app starts. After that, each image processes in just a few seconds.' },
+    { title: 'Best Results', text: 'Images with clear foreground subjects give the best results. Try HD mode for detailed edges like hair.' },
+    { title: 'Save as PNG', text: 'Results are saved as PNG with full transparency - perfect for designs and presentations.' },
+    { title: 'GPU Acceleration', text: 'Have an NVIDIA GPU or Apple Silicon? The AI automatically uses it for faster processing!' },
+    { title: 'Large Images', text: 'Very large images are automatically optimized. No need to resize before uploading.' }
+];
+
+let _splashMinDone = false;
+let _modelReady = false;
+let _splashLottie = null;
+let _tipInterval = null;
+
+function showSplash() {
+    const splash = document.getElementById('splashScreen');
+    if (!splash) return;
+
+    const shuffled = [...splashTips].sort(() => Math.random() - 0.5);
+    const count = Math.random() < 0.4 ? 1 : 2;
+    const picked = shuffled.slice(0, count);
+    let tipIndex = 0;
+
+    const tipContent = document.getElementById('splashTipContent');
+    const updateTip = () => {
+        const t = picked[tipIndex % picked.length];
+        tipContent.innerHTML = `<div class="splash-tip-title">${t.title}</div><div class="splash-tip-text">${t.text}</div>`;
+        tipIndex++;
+    };
+    updateTip();
+
+    if (picked.length > 1) {
+        _tipInterval = setInterval(updateTip, 4000);
+    }
+
+    try {
+        _splashLottie = lottie.loadAnimation({
+            container: document.getElementById('splashLottie'),
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            path: 'loadercat.json'
+        });
+    } catch (e) {
+        console.warn('Splash lottie failed:', e);
+    }
+
+    // Minimum 5 seconds display
+    setTimeout(() => {
+        _splashMinDone = true;
+        tryHideSplash();
+    }, 5000);
+}
+
+function tryHideSplash() {
+    if (!_modelReady || !_splashMinDone) return;
+    const splash = document.getElementById('splashScreen');
+    if (!splash || splash.classList.contains('hiding')) return;
+
+    if (_tipInterval) {
+        clearInterval(_tipInterval);
+        _tipInterval = null;
+    }
+
+    splash.classList.add('hiding');
+    setTimeout(() => {
+        splash.classList.add('hidden');
+        if (_splashLottie) {
+            _splashLottie.destroy();
+            _splashLottie = null;
+        }
+    }, 500);
+}
+
+// Listen for model-ready from main process
+window.electronAPI.onModelReady(() => {
+    console.log('Model ready signal received');
+    _modelReady = true;
+    tryHideSplash();
+});
+
+// Start splash on load
+showSplash();

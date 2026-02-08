@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveImage: (data, defaultName) => ipcRenderer.invoke('save-image', { data, defaultName }),
     removeBackground: (filePath, hdMode) => ipcRenderer.invoke('remove-background', { filePath, hdMode: hdMode || false }),
     onProgress: (callback) => ipcRenderer.on('processing-progress', (event, data) => callback(data)),
+    onModelReady: (callback) => ipcRenderer.on('model-ready', (event, status) => callback(status)),
     getDeviceInfo: () => ipcRenderer.invoke('get-device-info'),
     
     // Cloudflare R2 Storage

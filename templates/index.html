@@ -764,6 +764,11 @@
                     icon.textContent = '⚡';
                     text.textContent = `Running on your ${shortGpu}`;
                     badge.classList.add('ai-ready');
+                    // Auto-hide after 3 seconds
+                    setTimeout(() => {
+                        badge.style.opacity = '0';
+                        setTimeout(() => { badge.style.display = 'none'; }, 300);
+                    }, 3000);
                 } else {
                     badge.style.display = 'none';
                 }
@@ -787,6 +792,11 @@
                     icon.textContent = '⚡';
                     text.textContent = `Running on your ${shortGpu}`;
                     badge.classList.add('ai-ready');
+                    // Auto-hide after 3 seconds
+                    setTimeout(() => {
+                        badge.style.opacity = '0';
+                        setTimeout(() => { badge.style.display = 'none'; }, 300);
+                    }, 3000);
                 } else {
                     badge.style.display = 'none';
                 }

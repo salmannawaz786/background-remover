@@ -6,8 +6,21 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: https: blob:; connect-src 'self' data: blob: https://*.firebaseio.com https://*.googleapis.com https://*.firebaseapp.com https://*.r2.cloudflarestorage.com https://*.r2.dev; frame-src 'none';">
     <title>BG Remover - Desktop</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="lib/lottie.min.js"></script>
 </head>
 <body>
+    <!-- Splash Screen -->
+    <div class="splash-screen" id="splashScreen">
+        <div class="splash-content">
+            <div class="splash-lottie" id="splashLottie"></div>
+            <p class="splash-loading-text">Loading AI Engine...</p>
+            <div class="splash-tip-row" id="splashTipRow">
+                <span class="splash-bulb">💡</span>
+                <div class="splash-tip-content" id="splashTipContent"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
