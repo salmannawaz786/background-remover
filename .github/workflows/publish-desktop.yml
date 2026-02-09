@@ -68,10 +68,7 @@ jobs:
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
               '--collect-binaries', 'torchvision',
-              # Exclude heavy modules NOT needed for CPU inference
-              '--exclude-module', 'torch.distributed',
-              '--exclude-module', 'torch.testing',
-              '--exclude-module', 'torch.utils.tensorboard',
+              # Only exclude completely independent packages (NOT torch.*)
               '--exclude-module', 'torchaudio',
               '--exclude-module', 'matplotlib',
               '--exclude-module', 'tkinter',
@@ -80,12 +77,6 @@ jobs:
               '--exclude-module', 'IPython',
               '--exclude-module', 'jupyter',
               '--exclude-module', 'tensorboard',
-              '--exclude-module', 'onnx',
-              '--exclude-module', 'onnxruntime',
-              '--exclude-module', 'triton',
-              '--exclude-module', 'sympy',
-              '--exclude-module', 'scipy',
-              '--exclude-module', 'pandas',
               'birefnet_server.py'
           ]
           print('Running PyInstaller...')
@@ -93,13 +84,14 @@ jobs:
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
-              print(f'PyInstaller output: {count} files in {dist_dir}')
+              total_mb = sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(dist_dir) for f in fs) / 1024 / 1024
+              print(f'PyInstaller output: {count} files, {total_mb:.0f} MB in {dist_dir}')
           else:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
               sys.exit(1)
 
-      - name: Trim PyInstaller output (aggressive size reduction)
+      - name: Trim PyInstaller output (safe cleanup only)
         working-directory: ./bg_remover_desktop
         shell: python
         run: |
@@ -113,71 +105,39 @@ jobs:
           before = dir_size_mb(dist)
           print(f'Before trim: {before:.0f} MB')
 
-          # 1. Remove CUDA/GPU DLLs (CPU-only build)
+          # 1. Remove CUDA/GPU DLLs that may sneak in (CPU-only build)
           cuda_prefixes = ['cublas', 'cudart', 'cudnn', 'cusparse', 'cufft', 'curand',
                            'nvrtc', 'nvinfer', 'nvjitlink', 'cupti', 'cusolver', 'cublaslt']
           for root, dirs, files in os.walk(dist):
               for f in files:
                   fl = f.lower()
                   if any(fl.startswith(p) for p in cuda_prefixes):
+                      sz = os.path.getsize(os.path.join(root, f)) / 1024 / 1024
                       os.remove(os.path.join(root, f))
+                      print(f'  Removed CUDA: {f} ({sz:.0f} MB)')
 
-          # 2. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
-          torch_safe_remove = [
-              'distributed', 'testing', 'onnx', 'profiler',
-              'ao', 'contrib', 'package',
-          ]
-          for sub in torch_safe_remove:
-              p = os.path.join(dist, 'torch', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/{sub}/')
-          for sub in ['tensorboard', 'hipify']:
-              p = os.path.join(dist, 'torch', 'utils', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/utils/{sub}/')
-
-          # 3. Remove transformers model implementations (we use trust_remote_code)
-          models_dir = os.path.join(dist, 'transformers', 'models')
-          if os.path.isdir(models_dir):
-              keep = {'auto', '__init__.py', '__pycache__'}
-              removed_models = 0
-              for item in os.listdir(models_dir):
-                  if item not in keep:
-                      p = os.path.join(models_dir, item)
-                      if os.path.isdir(p):
-                          shutil.rmtree(p, ignore_errors=True)
-                          removed_models += 1
-              print(f'  Removed {removed_models} transformers model dirs')
-
-          # 4. Remove torchvision bloat (keep ops + models)
-          for sub in ['datasets', 'io']:
-              p = os.path.join(dist, 'torchvision', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-
-          # 5. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test']:
+          # 2. Remove test directories everywhere (safe - never imported)
+          for dname in ['tests', 'test', '__pycache__']:
               for root, dirs, files in os.walk(dist):
                   if dname in dirs:
                       shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
                       dirs.remove(dname)
 
-          # 6. Remove .pdb debug files and .lib static libs
+          # 3. Remove debug symbols and static libs (safe - not needed at runtime)
           for root, dirs, files in os.walk(dist):
               for f in files:
                   if f.endswith(('.pdb', '.lib', '.a', '.exp')):
                       os.remove(os.path.join(root, f))
 
-          # 7. Remove large unused binaries
+          # 4. Remove known unused large binaries (safe - separate executables)
           large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
           for root, dirs, files in os.walk(dist):
               for f in files:
                   fl = f.lower()
                   if any(fl.startswith(p) for p in large_remove):
+                      sz = os.path.getsize(os.path.join(root, f)) / 1024 / 1024
                       os.remove(os.path.join(root, f))
-                      print(f'  Removed binary: {f}')
+                      print(f'  Removed unused: {f} ({sz:.0f} MB)')
 
           after = dir_size_mb(dist)
           print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
@@ -299,10 +259,7 @@ jobs:
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
               '--collect-binaries', 'torchvision',
-              # Exclude heavy modules NOT needed for CPU inference
-              '--exclude-module', 'torch.distributed',
-              '--exclude-module', 'torch.testing',
-              '--exclude-module', 'torch.utils.tensorboard',
+              # Only exclude completely independent packages (NOT torch.*)
               '--exclude-module', 'torchaudio',
               '--exclude-module', 'matplotlib',
               '--exclude-module', 'tkinter',
@@ -311,12 +268,6 @@ jobs:
               '--exclude-module', 'IPython',
               '--exclude-module', 'jupyter',
               '--exclude-module', 'tensorboard',
-              '--exclude-module', 'onnx',
-              '--exclude-module', 'onnxruntime',
-              '--exclude-module', 'triton',
-              '--exclude-module', 'sympy',
-              '--exclude-module', 'scipy',
-              '--exclude-module', 'pandas',
               'birefnet_server.py'
           ]
           print('Running PyInstaller...')
@@ -324,13 +275,14 @@ jobs:
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
-              print(f'PyInstaller output: {count} files in {dist_dir}')
+              total_mb = sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(dist_dir) for f in fs) / 1024 / 1024
+              print(f'PyInstaller output: {count} files, {total_mb:.0f} MB in {dist_dir}')
           else:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
               sys.exit(1)
 
-      - name: Trim PyInstaller output (aggressive size reduction)
+      - name: Trim PyInstaller output (safe cleanup only)
         working-directory: ./bg_remover_desktop
         shell: python
         run: |
@@ -344,49 +296,14 @@ jobs:
           before = dir_size_mb(dist)
           print(f'Before trim: {before:.0f} MB')
 
-          # 1. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
-          torch_safe_remove = [
-              'distributed', 'testing', 'onnx', 'profiler',
-              'ao', 'contrib', 'package',
-          ]
-          for sub in torch_safe_remove:
-              p = os.path.join(dist, 'torch', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/{sub}/')
-          for sub in ['tensorboard', 'hipify']:
-              p = os.path.join(dist, 'torch', 'utils', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/utils/{sub}/')
-
-          # 2. Remove transformers model implementations (we use trust_remote_code)
-          models_dir = os.path.join(dist, 'transformers', 'models')
-          if os.path.isdir(models_dir):
-              keep = {'auto', '__init__.py', '__pycache__'}
-              removed_models = 0
-              for item in os.listdir(models_dir):
-                  if item not in keep:
-                      p = os.path.join(models_dir, item)
-                      if os.path.isdir(p):
-                          shutil.rmtree(p, ignore_errors=True)
-                          removed_models += 1
-              print(f'  Removed {removed_models} transformers model dirs')
-
-          # 3. Remove torchvision bloat (keep ops + models)
-          for sub in ['datasets', 'io']:
-              p = os.path.join(dist, 'torchvision', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-
-          # 4. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test']:
+          # 1. Remove test directories everywhere (safe - never imported)
+          for dname in ['tests', 'test', '__pycache__']:
               for root, dirs, files in os.walk(dist):
                   if dname in dirs:
                       shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
                       dirs.remove(dname)
 
-          # 5. Remove debug files
+          # 2. Remove debug symbols and static libs
           for root, dirs, files in os.walk(dist):
               for f in files:
                   if f.endswith(('.pdb', '.lib', '.a', '.exp', '.dSYM')):
@@ -394,14 +311,15 @@ jobs:
                       if os.path.isfile(fp):
                           os.remove(fp)
 
-          # 6. Remove large unused binaries
+          # 3. Remove known unused large binaries
           large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
           for root, dirs, files in os.walk(dist):
               for f in files:
                   fl = f.lower()
                   if any(fl.startswith(p) for p in large_remove):
+                      sz = os.path.getsize(os.path.join(root, f)) / 1024 / 1024
                       os.remove(os.path.join(root, f))
-                      print(f'  Removed binary: {f}')
+                      print(f'  Removed unused: {f} ({sz:.0f} MB)')
 
           after = dir_size_mb(dist)
           print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
