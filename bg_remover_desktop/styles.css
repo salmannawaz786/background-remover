@@ -614,11 +614,11 @@ body.dark-mode .splash-loading-text {
     color: #aaa;
 }
 
-/* Download Progress Bar */
-.splash-download-progress {
+/* Download progress bar */
+.splash-download {
     width: 100%;
-    max-width: 340px;
-    margin-top: 8px;
+    max-width: 320px;
+    margin-top: 12px;
 }
 
 .splash-progress-bar {
@@ -634,32 +634,22 @@ body.dark-mode .splash-progress-bar {
 }
 
 .splash-progress-fill {
-    height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    height: 100%;
+    background: linear-gradient(90deg, #facc15, #f59e0b);
     border-radius: 4px;
     transition: width 0.5s ease;
 }
 
 .splash-progress-text {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #6366f1;
-    margin-top: 8px;
+    font-size: 0.78rem;
+    color: #888;
+    margin-top: 6px;
+    font-weight: 500;
 }
 
 body.dark-mode .splash-progress-text {
-    color: #a5b4fc;
-}
-
-.splash-progress-hint {
-    font-size: 0.75rem;
-    color: #888;
-    margin-top: 2px;
-}
-
-body.dark-mode .splash-progress-hint {
-    color: #666;
+    color: #999;
 }
 
 .splash-tip-row {

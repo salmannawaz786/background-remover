@@ -135,21 +135,6 @@ function createWindow() {
     const pageToLoad = isAuthenticated ? 'index.html' : 'auth.html';
     mainWindow.loadFile(pageToLoad);
     
-    // Start BiRefNet server after page finishes loading (ensures IPC listeners are registered)
-    mainWindow.webContents.on('did-finish-load', () => {
-        // Start server if not already started
-        if (!birefnetServer) {
-            startBiRefNetServer();
-        }
-        // Re-send buffered state on page navigation (e.g. auth.html -> index.html)
-        if (downloadProgressState) {
-            mainWindow.webContents.send('model-download-progress', downloadProgressState);
-        }
-        if (serverReady) {
-            mainWindow.webContents.send('model-ready', 'birefnet');
-        }
-    });
-    
     // Open DevTools in development
     if (process.argv.includes('--dev')) {
         mainWindow.webContents.openDevTools();
@@ -419,7 +404,6 @@ let isProcessing = false;
 // Persistent Python BiRefNet server
 let birefnetServer = null;
 let serverReady = false;
-let downloadProgressState = null;  // Buffer for IPC timing
 
 // Start the persistent Python server
 function startBiRefNetServer() {
@@ -483,9 +467,24 @@ function startBiRefNetServer() {
                     if (msg.status === 'ready') {
                         serverReady = true;
                         console.log('✅ BiRefNet server ready');
-                        // Notify renderer to hide splash screen
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send('model-ready', 'birefnet');
+                        }
+                    } else if (msg.status === 'downloading') {
+                        console.log(`⬇️ Model download: ${msg.progress}%`);
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('model-download-progress', {
+                                progress: msg.progress,
+                                message: msg.message || 'Downloading...'
+                            });
+                        }
+                    } else if (msg.status === 'loading') {
+                        console.log('⏳ Loading model...');
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('model-download-progress', {
+                                progress: 100,
+                                message: msg.message || 'Loading AI engine...'
+                            });
                         }
                     }
                 } catch (e) {
@@ -497,63 +496,13 @@ function startBiRefNetServer() {
     });
     
     birefnetServer.stderr.on('data', (data) => {
-        const text = data.toString();
-        // Split on both \n and \r to handle tqdm-style output
-        for (const line of text.split(/[\r\n]+/)) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            
-            if (trimmed === 'DOWNLOAD_START') {
-                console.log('📥 Model download started (first run)');
-                downloadProgressState = { status: 'start', percent: 0, mbDone: 0, mbTotal: 0 };
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
-                }
-            } else if (trimmed.startsWith('DOWNLOAD_PROGRESS:')) {
-                const parts = trimmed.split(':');
-                const pct = parseInt(parts[1], 10);
-                const mbDone = parts[2] ? parseInt(parts[2], 10) : 0;
-                const mbTotal = parts[3] ? parseInt(parts[3], 10) : 0;
-                console.log(`📥 Model download: ${pct}% (${mbDone}/${mbTotal} MB)`);
-                downloadProgressState = { status: 'downloading', percent: pct, mbDone, mbTotal };
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
-                }
-            } else if (trimmed === 'DOWNLOAD_DONE') {
-                console.log('✅ Model download complete');
-                downloadProgressState = { status: 'done', percent: 100 };
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
-                }
-            } else if (trimmed.startsWith('DOWNLOAD_ERROR:')) {
-                const errMsg = trimmed.substring('DOWNLOAD_ERROR:'.length).trim();
-                console.error('📥 Model download error:', errMsg);
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('server-error', { code: -1, message: `Download failed: ${errMsg}` });
-                }
-            } else if (trimmed.startsWith('SERVER_ERROR:')) {
-                const errMsg = trimmed.substring('SERVER_ERROR:'.length).trim();
-                console.error('❌ Server error:', errMsg);
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('server-error', { code: -1, message: errMsg });
-                }
-            } else {
-                console.log('[Python stderr]', trimmed);
-            }
-        }
+        console.log('[Python stderr]', data.toString().trim());
     });
     
     birefnetServer.on('close', (code) => {
         console.log(`BiRefNet server exited with code ${code}`);
         birefnetServer = null;
         serverReady = false;
-        // If server crashed before becoming ready, notify renderer
-        if (code !== 0 && code !== null) {
-            console.error('❌ Python server crashed with code:', code);
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('server-error', { code, message: 'AI engine crashed. Please restart the app.' });
-            }
-        }
     });
     
     birefnetServer.on('error', (err) => {
@@ -601,7 +550,10 @@ async function processWithServer(filePath, hdMode) {
     });
 }
 
-// Server is now started via did-finish-load in createWindow()
+// Start server when app is ready
+app.whenReady().then(() => {
+    startBiRefNetServer();
+});
 
 // Clean up server on exit
 app.on('before-quit', () => {
@@ -678,9 +630,9 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
         console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform);
         console.log('Using persistent BiRefNet server');
         
-        // Wait for server to be ready (max 5 min on first run for model download)
+        // Wait for server to be ready (max 10min on first run for model download)
         let waitTime = 0;
-        while (!serverReady && waitTime < 300000) {
+        while (!serverReady && waitTime < 600000) {
             await new Promise(r => setTimeout(r, 500));
             waitTime += 500;
         }

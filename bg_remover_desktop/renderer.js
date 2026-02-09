@@ -476,30 +476,24 @@ function tryHideSplash() {
     }, 500);
 }
 
-// Listen for model download progress (first run only)
+// Listen for model download progress from main process
 window.electronAPI.onModelDownloadProgress((data) => {
-    const progressContainer = document.getElementById('splashDownloadProgress');
-    const progressFill = document.getElementById('splashProgressFill');
-    const progressText = document.getElementById('splashProgressText');
-    const loadingText = document.getElementById('splashLoadingText');
-    
-    if (!progressContainer) return;
-    
-    if (data.status === 'start') {
-        progressContainer.style.display = 'block';
-        loadingText.textContent = 'Downloading AI Model...';
-        progressFill.style.width = '0%';
-        progressText.textContent = 'Downloading AI model... 0%';
-    } else if (data.status === 'downloading') {
-        progressContainer.style.display = 'block';
-        loadingText.textContent = 'Downloading AI Model...';
-        progressFill.style.width = data.percent + '%';
-        const mbInfo = data.mbTotal > 0 ? ` (${data.mbDone} / ${data.mbTotal} MB)` : '';
-        progressText.textContent = `Downloading AI model... ${data.percent}%${mbInfo}`;
-    } else if (data.status === 'done') {
-        progressFill.style.width = '100%';
-        progressText.textContent = 'Download complete! Loading model...';
-        loadingText.textContent = 'Loading AI Engine...';
+    const downloadEl = document.getElementById('splashDownload');
+    const fillEl = document.getElementById('splashProgressFill');
+    const textEl = document.getElementById('splashProgressText');
+    const loadingTextEl = document.getElementById('splashLoadingText');
+
+    if (downloadEl && fillEl && textEl) {
+        downloadEl.style.display = 'block';
+        fillEl.style.width = `${data.progress}%`;
+        textEl.textContent = data.message || `Downloading... ${data.progress}%`;
+    }
+    if (loadingTextEl) {
+        if (data.progress < 100) {
+            loadingTextEl.textContent = 'First-time setup';
+        } else {
+            loadingTextEl.textContent = 'Almost ready...';
+        }
     }
 });
 
@@ -509,32 +503,6 @@ window.electronAPI.onModelReady(() => {
     _modelReady = true;
     tryHideSplash();
 });
-
-// Handle server crash - show error instead of staying stuck on splash
-window.electronAPI.onServerError((data) => {
-    console.error('Server error:', data);
-    const loadingText = document.getElementById('splashLoadingText');
-    const progressContainer = document.getElementById('splashDownloadProgress');
-    if (loadingText) {
-        loadingText.textContent = data.message || 'AI engine error. Please restart the app.';
-        loadingText.style.color = '#ff4444';
-    }
-    if (progressContainer) {
-        progressContainer.style.display = 'none';
-    }
-});
-
-// Splash screen safety timeout - don't stay stuck forever (5 min)
-setTimeout(() => {
-    if (!_modelReady) {
-        console.warn('Splash screen timeout reached');
-        const loadingText = document.getElementById('splashLoadingText');
-        if (loadingText) {
-            loadingText.textContent = 'Taking longer than expected... Please restart the app.';
-            loadingText.style.color = '#ff9900';
-        }
-    }
-}, 300000);
 
 // Start splash on load
 showSplash();

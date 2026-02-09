@@ -17,16 +17,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clean old release assets
-        continue-on-error: true
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG_NAME="${GITHUB_REF#refs/tags/}"
-          echo "Cleaning old assets for release $TAG_NAME"
-          gh release delete "$TAG_NAME" --yes --cleanup-tag=false 2>/dev/null || echo "No existing release to delete"
-
       - name: Setup Python 3.10
         uses: actions/setup-python@v5
         with:
@@ -36,13 +26,26 @@ jobs:
         run: |
           pip install pyinstaller
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm huggingface_hub
+          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
         run: |
           import subprocess, sys, os
+          # Exclude unused torch modules to reduce bundle size
+          excludes = [
+              'torch.distributed', 'torch.testing', 'torch.utils.bottleneck',
+              'torch.utils.tensorboard', 'torch.cuda.nccl',
+              'torch.backends.cudnn', 'torch.backends.cusparselt',
+              'torchvision.datasets', 'torchvision.models.video',
+              'torchvision.models.detection', 'torchvision.models.segmentation',
+              'torchvision.models.optical_flow',
+              'transformers.agents', 'transformers.pipelines',
+              'transformers.training_utils',
+              'unittest', 'pytest', 'IPython', 'jupyter',
+              'tkinter', 'matplotlib', 'scipy',
+          ]
           cmd = [
               sys.executable, '-m', 'PyInstaller',
               '--name', 'birefnet_server',
@@ -53,7 +56,6 @@ jobs:
               '--hidden-import', 'torch',
               '--hidden-import', 'torchvision',
               '--hidden-import', 'transformers',
-              '--hidden-import', 'huggingface_hub',
               '--hidden-import', 'PIL',
               '--hidden-import', 'numpy',
               '--hidden-import', 'cv2',
@@ -62,32 +64,14 @@ jobs:
               '--hidden-import', 'kornia',
               '--hidden-import', 'timm',
               '--collect-submodules', 'torch',
-              '--collect-submodules', 'torchvision',
               '--collect-submodules', 'transformers',
               '--collect-submodules', 'safetensors',
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
-              '--collect-binaries', 'torchvision',
-              # Exclude heavy modules NOT needed for CPU inference
-              '--exclude-module', 'torch.distributed',
-              '--exclude-module', 'torch.testing',
-              '--exclude-module', 'torch.utils.tensorboard',
-              '--exclude-module', 'torchaudio',
-              '--exclude-module', 'matplotlib',
-              '--exclude-module', 'tkinter',
-              '--exclude-module', 'pytest',
-              '--exclude-module', 'unittest',
-              '--exclude-module', 'IPython',
-              '--exclude-module', 'jupyter',
-              '--exclude-module', 'tensorboard',
-              '--exclude-module', 'onnx',
-              '--exclude-module', 'onnxruntime',
-              '--exclude-module', 'triton',
-              '--exclude-module', 'sympy',
-              '--exclude-module', 'scipy',
-              '--exclude-module', 'pandas',
-              'birefnet_server.py'
           ]
+          for mod in excludes:
+              cmd += ['--exclude-module', mod]
+          cmd.append('birefnet_server.py')
           print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
           dist_dir = os.path.join('dist', 'birefnet_server')
@@ -98,76 +82,6 @@ jobs:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
               sys.exit(1)
-
-      - name: Trim PyInstaller output (aggressive size reduction)
-        working-directory: ./bg_remover_desktop
-        shell: python
-        run: |
-          import os, shutil
-
-          dist = os.path.join('dist', 'birefnet_server')
-
-          def dir_size_mb(path):
-              return sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(path) for f in fs) / 1024 / 1024
-
-          before = dir_size_mb(dist)
-          print(f'Before trim: {before:.0f} MB')
-
-          # 1. Remove CUDA/GPU DLLs (CPU-only build)
-          cuda_prefixes = ['cublas', 'cudart', 'cudnn', 'cusparse', 'cufft', 'curand',
-                           'nvrtc', 'nvinfer', 'nvjitlink', 'cupti', 'cusolver', 'cublaslt']
-          for root, dirs, files in os.walk(dist):
-              for f in files:
-                  fl = f.lower()
-                  if any(fl.startswith(p) for p in cuda_prefixes):
-                      os.remove(os.path.join(root, f))
-
-          # 2. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
-          torch_safe_remove = [
-              'distributed', 'testing', 'onnx', 'profiler',
-              'ao', 'contrib', 'package',
-          ]
-          for sub in torch_safe_remove:
-              p = os.path.join(dist, 'torch', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/{sub}/')
-          for sub in ['tensorboard', 'hipify']:
-              p = os.path.join(dist, 'torch', 'utils', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/utils/{sub}/')
-
-          # 3. Remove torchvision datasets/io (not needed for inference)
-          for sub in ['datasets', 'io']:
-              p = os.path.join(dist, 'torchvision', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-
-          # 4. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test']:
-              for root, dirs, files in os.walk(dist):
-                  if dname in dirs:
-                      shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
-                      dirs.remove(dname)
-
-          # 5. Remove .pdb debug files and .lib static libs
-          for root, dirs, files in os.walk(dist):
-              for f in files:
-                  if f.endswith(('.pdb', '.lib', '.a', '.exp')):
-                      os.remove(os.path.join(root, f))
-
-          # 6. Remove large unused binaries
-          large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
-          for root, dirs, files in os.walk(dist):
-              for f in files:
-                  fl = f.lower()
-                  if any(fl.startswith(p) for p in large_remove):
-                      os.remove(os.path.join(root, f))
-                      print(f'  Removed binary: {f}')
-
-          after = dir_size_mb(dist)
-          print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
 
       - name: Move PyInstaller output to python-dist
         working-directory: ./bg_remover_desktop
@@ -239,7 +153,6 @@ jobs:
 
   publish-macos:
     runs-on: macos-14
-    needs: publish-windows
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -254,13 +167,26 @@ jobs:
         run: |
           pip install pyinstaller
           pip install torch torchvision
-          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm huggingface_hub
+          pip install transformers Pillow numpy opencv-python-headless safetensors einops kornia timm
 
       - name: Build Python server with PyInstaller
         working-directory: ./bg_remover_desktop
         shell: python
         run: |
           import subprocess, sys, os
+          # Exclude unused torch modules to reduce bundle size
+          excludes = [
+              'torch.distributed', 'torch.testing', 'torch.utils.bottleneck',
+              'torch.utils.tensorboard', 'torch.cuda.nccl',
+              'torch.backends.cudnn', 'torch.backends.cusparselt',
+              'torchvision.datasets', 'torchvision.models.video',
+              'torchvision.models.detection', 'torchvision.models.segmentation',
+              'torchvision.models.optical_flow',
+              'transformers.agents', 'transformers.pipelines',
+              'transformers.training_utils',
+              'unittest', 'pytest', 'IPython', 'jupyter',
+              'tkinter', 'matplotlib', 'scipy',
+          ]
           cmd = [
               sys.executable, '-m', 'PyInstaller',
               '--name', 'birefnet_server',
@@ -271,7 +197,6 @@ jobs:
               '--hidden-import', 'torch',
               '--hidden-import', 'torchvision',
               '--hidden-import', 'transformers',
-              '--hidden-import', 'huggingface_hub',
               '--hidden-import', 'PIL',
               '--hidden-import', 'numpy',
               '--hidden-import', 'cv2',
@@ -280,32 +205,14 @@ jobs:
               '--hidden-import', 'kornia',
               '--hidden-import', 'timm',
               '--collect-submodules', 'torch',
-              '--collect-submodules', 'torchvision',
               '--collect-submodules', 'transformers',
               '--collect-submodules', 'safetensors',
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
-              '--collect-binaries', 'torchvision',
-              # Exclude heavy modules NOT needed for CPU inference
-              '--exclude-module', 'torch.distributed',
-              '--exclude-module', 'torch.testing',
-              '--exclude-module', 'torch.utils.tensorboard',
-              '--exclude-module', 'torchaudio',
-              '--exclude-module', 'matplotlib',
-              '--exclude-module', 'tkinter',
-              '--exclude-module', 'pytest',
-              '--exclude-module', 'unittest',
-              '--exclude-module', 'IPython',
-              '--exclude-module', 'jupyter',
-              '--exclude-module', 'tensorboard',
-              '--exclude-module', 'onnx',
-              '--exclude-module', 'onnxruntime',
-              '--exclude-module', 'triton',
-              '--exclude-module', 'sympy',
-              '--exclude-module', 'scipy',
-              '--exclude-module', 'pandas',
-              'birefnet_server.py'
           ]
+          for mod in excludes:
+              cmd += ['--exclude-module', mod]
+          cmd.append('birefnet_server.py')
           print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
           dist_dir = os.path.join('dist', 'birefnet_server')
@@ -316,69 +223,6 @@ jobs:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
               sys.exit(1)
-
-      - name: Trim PyInstaller output (aggressive size reduction)
-        working-directory: ./bg_remover_desktop
-        shell: python
-        run: |
-          import os, shutil
-
-          dist = os.path.join('dist', 'birefnet_server')
-
-          def dir_size_mb(path):
-              return sum(os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(path) for f in fs) / 1024 / 1024
-
-          before = dir_size_mb(dist)
-          print(f'Before trim: {before:.0f} MB')
-
-          # 1. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
-          torch_safe_remove = [
-              'distributed', 'testing', 'onnx', 'profiler',
-              'ao', 'contrib', 'package',
-          ]
-          for sub in torch_safe_remove:
-              p = os.path.join(dist, 'torch', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/{sub}/')
-          for sub in ['tensorboard', 'hipify']:
-              p = os.path.join(dist, 'torch', 'utils', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-                  print(f'  Removed torch/utils/{sub}/')
-
-          # 2. Remove torchvision datasets/io (not needed for inference)
-          for sub in ['datasets', 'io']:
-              p = os.path.join(dist, 'torchvision', sub)
-              if os.path.isdir(p):
-                  shutil.rmtree(p, ignore_errors=True)
-
-          # 3. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test']:
-              for root, dirs, files in os.walk(dist):
-                  if dname in dirs:
-                      shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
-                      dirs.remove(dname)
-
-          # 4. Remove debug files
-          for root, dirs, files in os.walk(dist):
-              for f in files:
-                  if f.endswith(('.pdb', '.lib', '.a', '.exp', '.dSYM')):
-                      fp = os.path.join(root, f)
-                      if os.path.isfile(fp):
-                          os.remove(fp)
-
-          # 5. Remove large unused binaries
-          large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
-          for root, dirs, files in os.walk(dist):
-              for f in files:
-                  fl = f.lower()
-                  if any(fl.startswith(p) for p in large_remove):
-                      os.remove(os.path.join(root, f))
-                      print(f'  Removed binary: {f}')
-
-          after = dir_size_mb(dist)
-          print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
 
       - name: Move PyInstaller output to python-dist
         working-directory: ./bg_remover_desktop
