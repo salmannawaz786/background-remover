@@ -531,6 +531,12 @@ function startBiRefNetServer() {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('server-error', { code: -1, message: `Download failed: ${errMsg}` });
                 }
+            } else if (trimmed.startsWith('SERVER_ERROR:')) {
+                const errMsg = trimmed.substring('SERVER_ERROR:'.length).trim();
+                console.error('❌ Server error:', errMsg);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('server-error', { code: -1, message: errMsg });
+                }
             } else {
                 console.log('[Python stderr]', trimmed);
             }

@@ -44,7 +44,10 @@ class BiRefNetServer:
             sys.stderr.flush()
             print(json.dumps({"status": "ready", "message": "Model loaded"}), flush=True)
         except Exception as e:
-            sys.stderr.write(f"❌ Model load failed: {e}\n")
+            import traceback
+            tb = traceback.format_exc()
+            sys.stderr.write(f"SERVER_ERROR: Model load failed: {e}\n")
+            sys.stderr.write(f"{tb}\n")
             sys.stderr.flush()
             print(json.dumps({"status": "error", "error": str(e)}), flush=True)
             sys.exit(1)
@@ -111,5 +114,15 @@ class BiRefNetServer:
                 print(json.dumps({"success": False, "error": str(e)}), flush=True)
 
 if __name__ == '__main__':
-    server = BiRefNetServer()
-    server.run()
+    try:
+        server = BiRefNetServer()
+        server.run()
+    except SystemExit:
+        pass  # Normal exit from sys.exit()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        sys.stderr.write(f"SERVER_ERROR: Fatal crash: {e}\n")
+        sys.stderr.write(f"{tb}\n")
+        sys.stderr.flush()
+        sys.exit(1)

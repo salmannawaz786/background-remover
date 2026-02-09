@@ -149,7 +149,7 @@ class BiRefNetPyTorch:
         try:
             from huggingface_hub import HfApi
             api = HfApi()
-            info = api.repo_info(repo_id, files_metadata=True, timeout=15)
+            info = api.repo_info(repo_id, files_metadata=True)
             api_total = sum((s.size or 0) for s in info.siblings)
             if api_total > 0:
                 total_bytes = api_total
