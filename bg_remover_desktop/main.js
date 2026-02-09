@@ -135,6 +135,21 @@ function createWindow() {
     const pageToLoad = isAuthenticated ? 'index.html' : 'auth.html';
     mainWindow.loadFile(pageToLoad);
     
+    // Start BiRefNet server after page finishes loading (ensures IPC listeners are registered)
+    mainWindow.webContents.on('did-finish-load', () => {
+        // Start server if not already started
+        if (!birefnetServer) {
+            startBiRefNetServer();
+        }
+        // Re-send buffered state on page navigation (e.g. auth.html -> index.html)
+        if (downloadProgressState) {
+            mainWindow.webContents.send('model-download-progress', downloadProgressState);
+        }
+        if (serverReady) {
+            mainWindow.webContents.send('model-ready', 'birefnet');
+        }
+    });
+    
     // Open DevTools in development
     if (process.argv.includes('--dev')) {
         mainWindow.webContents.openDevTools();
@@ -404,6 +419,7 @@ let isProcessing = false;
 // Persistent Python BiRefNet server
 let birefnetServer = null;
 let serverReady = false;
+let downloadProgressState = null;  // Buffer for IPC timing
 
 // Start the persistent Python server
 function startBiRefNetServer() {
@@ -489,8 +505,9 @@ function startBiRefNetServer() {
             
             if (trimmed === 'DOWNLOAD_START') {
                 console.log('📥 Model download started (first run)');
+                downloadProgressState = { status: 'start', percent: 0, mbDone: 0, mbTotal: 0 };
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', { status: 'start', percent: 0, mbDone: 0, mbTotal: 0 });
+                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
                 }
             } else if (trimmed.startsWith('DOWNLOAD_PROGRESS:')) {
                 const parts = trimmed.split(':');
@@ -498,13 +515,21 @@ function startBiRefNetServer() {
                 const mbDone = parts[2] ? parseInt(parts[2], 10) : 0;
                 const mbTotal = parts[3] ? parseInt(parts[3], 10) : 0;
                 console.log(`📥 Model download: ${pct}% (${mbDone}/${mbTotal} MB)`);
+                downloadProgressState = { status: 'downloading', percent: pct, mbDone, mbTotal };
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', { status: 'downloading', percent: pct, mbDone, mbTotal });
+                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
                 }
             } else if (trimmed === 'DOWNLOAD_DONE') {
                 console.log('✅ Model download complete');
+                downloadProgressState = { status: 'done', percent: 100 };
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('model-download-progress', { status: 'done', percent: 100 });
+                    mainWindow.webContents.send('model-download-progress', downloadProgressState);
+                }
+            } else if (trimmed.startsWith('DOWNLOAD_ERROR:')) {
+                const errMsg = trimmed.substring('DOWNLOAD_ERROR:'.length).trim();
+                console.error('📥 Model download error:', errMsg);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('server-error', { code: -1, message: `Download failed: ${errMsg}` });
                 }
             } else {
                 console.log('[Python stderr]', trimmed);
@@ -516,6 +541,13 @@ function startBiRefNetServer() {
         console.log(`BiRefNet server exited with code ${code}`);
         birefnetServer = null;
         serverReady = false;
+        // If server crashed before becoming ready, notify renderer
+        if (code !== 0 && code !== null) {
+            console.error('❌ Python server crashed with code:', code);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('server-error', { code, message: 'AI engine crashed. Please restart the app.' });
+            }
+        }
     });
     
     birefnetServer.on('error', (err) => {
@@ -563,10 +595,7 @@ async function processWithServer(filePath, hdMode) {
     });
 }
 
-// Start server when app is ready
-app.whenReady().then(() => {
-    startBiRefNetServer();
-});
+// Server is now started via did-finish-load in createWindow()
 
 // Clean up server on exit
 app.on('before-quit', () => {

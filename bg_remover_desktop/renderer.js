@@ -510,5 +510,31 @@ window.electronAPI.onModelReady(() => {
     tryHideSplash();
 });
 
+// Handle server crash - show error instead of staying stuck on splash
+window.electronAPI.onServerError((data) => {
+    console.error('Server error:', data);
+    const loadingText = document.getElementById('splashLoadingText');
+    const progressContainer = document.getElementById('splashDownloadProgress');
+    if (loadingText) {
+        loadingText.textContent = data.message || 'AI engine error. Please restart the app.';
+        loadingText.style.color = '#ff4444';
+    }
+    if (progressContainer) {
+        progressContainer.style.display = 'none';
+    }
+});
+
+// Splash screen safety timeout - don't stay stuck forever (5 min)
+setTimeout(() => {
+    if (!_modelReady) {
+        console.warn('Splash screen timeout reached');
+        const loadingText = document.getElementById('splashLoadingText');
+        if (loadingText) {
+            loadingText.textContent = 'Taking longer than expected... Please restart the app.';
+            loadingText.style.color = '#ff9900';
+        }
+    }
+}, 300000);
+
 // Start splash on load
 showSplash();

@@ -141,17 +141,21 @@ class BiRefNetPyTorch:
         
         repo_id = 'ZhengPeng7/BiRefNet_lite'
         
-        # Get expected total size from HuggingFace API
+        # Ensure cache dir exists
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Get expected total size from HuggingFace API (with timeout)
         total_bytes = 170 * 1024 * 1024  # fallback: ~170MB
         try:
             from huggingface_hub import HfApi
             api = HfApi()
-            info = api.repo_info(repo_id, files_metadata=True)
+            info = api.repo_info(repo_id, files_metadata=True, timeout=15)
             api_total = sum((s.size or 0) for s in info.siblings)
             if api_total > 0:
                 total_bytes = api_total
-        except Exception:
-            pass
+            logger.info(f"Model total size from API: {total_bytes / 1024 / 1024:.0f} MB")
+        except Exception as e:
+            logger.warning(f"Could not get model size from API (using fallback): {e}")
         
         # Measure initial cache size
         def get_dir_size(path):
@@ -174,12 +178,15 @@ class BiRefNetPyTorch:
         def do_download():
             try:
                 from huggingface_hub import snapshot_download
+                logger.info(f"Starting snapshot_download to {cache_dir}")
                 snapshot_download(
                     repo_id,
                     cache_dir=cache_dir,
                     local_files_only=False
                 )
+                logger.info("snapshot_download completed successfully")
             except Exception as e:
+                logger.error(f"snapshot_download failed: {e}")
                 download_error[0] = e
             finally:
                 download_done.set()
@@ -211,8 +218,11 @@ class BiRefNetPyTorch:
         mon_thread.join(timeout=2)
         
         if download_error[0]:
-            logger.error(f"Download failed: {download_error[0]}")
-            # Fallback: direct download without progress
+            logger.error(f"Download with progress failed: {download_error[0]}")
+            sys.stderr.write(f"DOWNLOAD_ERROR: {download_error[0]}\n")
+            sys.stderr.flush()
+            # Fallback: direct download without progress tracking
+            logger.info("Trying fallback download via from_pretrained...")
             from transformers import AutoModelForImageSegmentation
             self._model = AutoModelForImageSegmentation.from_pretrained(
                 'ZhengPeng7/BiRefNet_lite',

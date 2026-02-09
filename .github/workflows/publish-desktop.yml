@@ -17,6 +17,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean old release assets
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "Cleaning old assets for release $TAG_NAME"
+          gh release delete "$TAG_NAME" --yes --cleanup-tag=false 2>/dev/null || echo "No existing release to delete"
+
       - name: Setup Python 3.10
         uses: actions/setup-python@v5
         with:
@@ -112,38 +122,43 @@ jobs:
                   if any(fl.startswith(p) for p in cuda_prefixes):
                       os.remove(os.path.join(root, f))
 
-          # 2. Remove heavy torch subpackages not needed for inference
-          torch_remove = [
-              '_dynamo', '_inductor', '_functorch', 'distributed', 'testing',
-              'onnx', 'profiler', '_export', '_higher_order_ops',
-              'ao', 'compiler', 'contrib', 'package',
-              'utils/tensorboard', 'utils/hipify',
+          # 2. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
+          torch_safe_remove = [
+              'distributed', 'testing', 'onnx', 'profiler',
+              'ao', 'contrib', 'package',
           ]
-          for sub in torch_remove:
+          for sub in torch_safe_remove:
               p = os.path.join(dist, 'torch', sub)
               if os.path.isdir(p):
                   shutil.rmtree(p, ignore_errors=True)
+                  print(f'  Removed torch/{sub}/')
+          for sub in ['tensorboard', 'hipify']:
+              p = os.path.join(dist, 'torch', 'utils', sub)
+              if os.path.isdir(p):
+                  shutil.rmtree(p, ignore_errors=True)
+                  print(f'  Removed torch/utils/{sub}/')
 
           # 3. Remove transformers model implementations (we use trust_remote_code)
           models_dir = os.path.join(dist, 'transformers', 'models')
           if os.path.isdir(models_dir):
-              # Keep only auto, configuration_utils needed for AutoModel
               keep = {'auto', '__init__.py', '__pycache__'}
+              removed_models = 0
               for item in os.listdir(models_dir):
                   if item not in keep:
                       p = os.path.join(models_dir, item)
                       if os.path.isdir(p):
                           shutil.rmtree(p, ignore_errors=True)
+                          removed_models += 1
+              print(f'  Removed {removed_models} transformers model dirs')
 
-          # 4. Remove torchvision bloat (keep only ops and models we need)
-          tv_remove = ['datasets', 'io', 'utils', 'transforms/_presets.py']
-          for sub in tv_remove:
+          # 4. Remove torchvision bloat (keep ops + models)
+          for sub in ['datasets', 'io']:
               p = os.path.join(dist, 'torchvision', sub)
               if os.path.isdir(p):
                   shutil.rmtree(p, ignore_errors=True)
 
           # 5. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test', 'testing']:
+          for dname in ['tests', 'test', '__pycache__', '_test']:
               for root, dirs, files in os.walk(dist):
                   if dname in dirs:
                       shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
@@ -155,13 +170,14 @@ jobs:
                   if f.endswith(('.pdb', '.lib', '.a', '.exp')):
                       os.remove(os.path.join(root, f))
 
-          # 7. Remove large unused DLLs
-          large_remove = ['aclml', 'caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
+          # 7. Remove large unused binaries
+          large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
           for root, dirs, files in os.walk(dist):
               for f in files:
                   fl = f.lower()
                   if any(fl.startswith(p) for p in large_remove):
                       os.remove(os.path.join(root, f))
+                      print(f'  Removed binary: {f}')
 
           after = dir_size_mb(dist)
           print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
@@ -236,6 +252,7 @@ jobs:
 
   publish-macos:
     runs-on: macos-14
+    needs: publish-windows
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -327,37 +344,43 @@ jobs:
           before = dir_size_mb(dist)
           print(f'Before trim: {before:.0f} MB')
 
-          # 1. Remove heavy torch subpackages not needed for inference
-          torch_remove = [
-              '_dynamo', '_inductor', '_functorch', 'distributed', 'testing',
-              'onnx', 'profiler', '_export', '_higher_order_ops',
-              'ao', 'compiler', 'contrib', 'package',
-              'utils/tensorboard', 'utils/hipify',
+          # 1. Remove torch subpackages safe to remove (NOT _dynamo/_inductor/_functorch - torch needs them)
+          torch_safe_remove = [
+              'distributed', 'testing', 'onnx', 'profiler',
+              'ao', 'contrib', 'package',
           ]
-          for sub in torch_remove:
+          for sub in torch_safe_remove:
               p = os.path.join(dist, 'torch', sub)
               if os.path.isdir(p):
                   shutil.rmtree(p, ignore_errors=True)
+                  print(f'  Removed torch/{sub}/')
+          for sub in ['tensorboard', 'hipify']:
+              p = os.path.join(dist, 'torch', 'utils', sub)
+              if os.path.isdir(p):
+                  shutil.rmtree(p, ignore_errors=True)
+                  print(f'  Removed torch/utils/{sub}/')
 
           # 2. Remove transformers model implementations (we use trust_remote_code)
           models_dir = os.path.join(dist, 'transformers', 'models')
           if os.path.isdir(models_dir):
               keep = {'auto', '__init__.py', '__pycache__'}
+              removed_models = 0
               for item in os.listdir(models_dir):
                   if item not in keep:
                       p = os.path.join(models_dir, item)
                       if os.path.isdir(p):
                           shutil.rmtree(p, ignore_errors=True)
+                          removed_models += 1
+              print(f'  Removed {removed_models} transformers model dirs')
 
-          # 3. Remove torchvision bloat
-          tv_remove = ['datasets', 'io', 'utils', 'transforms/_presets.py']
-          for sub in tv_remove:
+          # 3. Remove torchvision bloat (keep ops + models)
+          for sub in ['datasets', 'io']:
               p = os.path.join(dist, 'torchvision', sub)
               if os.path.isdir(p):
                   shutil.rmtree(p, ignore_errors=True)
 
           # 4. Remove test/cache dirs everywhere
-          for dname in ['tests', 'test', '__pycache__', '_test', 'testing']:
+          for dname in ['tests', 'test', '__pycache__', '_test']:
               for root, dirs, files in os.walk(dist):
                   if dname in dirs:
                       shutil.rmtree(os.path.join(root, dname), ignore_errors=True)
@@ -371,13 +394,14 @@ jobs:
                       if os.path.isfile(fp):
                           os.remove(fp)
 
-          # 6. Remove large unused libs
+          # 6. Remove large unused binaries
           large_remove = ['caffe2', 'nvfuser', 'torch_cuda', 'torch_hip']
           for root, dirs, files in os.walk(dist):
               for f in files:
                   fl = f.lower()
                   if any(fl.startswith(p) for p in large_remove):
                       os.remove(os.path.join(root, f))
+                      print(f'  Removed binary: {f}')
 
           after = dir_size_mb(dist)
           print(f'After trim: {after:.0f} MB (saved {before - after:.0f} MB)')
