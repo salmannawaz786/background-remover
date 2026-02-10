@@ -96,20 +96,13 @@ class BiRefNetPyTorch:
                 )
                 logger.info("Loaded model from local cache (no network)")
             except Exception:
-                # First run: download with progress reporting
+                # First run: download and cache
                 logger.info("Downloading model (first run only)...")
-                sys.stderr.write("DOWNLOAD_START\n")
-                sys.stderr.flush()
-                self._download_model_with_progress(cache_dir)
-                # Now load from cache
                 self._model = AutoModelForImageSegmentation.from_pretrained(
                     'ZhengPeng7/BiRefNet_lite',
                     trust_remote_code=True,
-                    cache_dir=cache_dir,
-                    local_files_only=True
+                    cache_dir=cache_dir
                 )
-                sys.stderr.write("DOWNLOAD_DONE\n")
-                sys.stderr.flush()
             
             self._model.to(self._device)
             self._model.eval()
@@ -134,106 +127,6 @@ class BiRefNetPyTorch:
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
             raise
-    
-    def _download_model_with_progress(self, cache_dir):
-        """Download model with real byte-level progress reporting via stderr"""
-        import threading
-        
-        repo_id = 'ZhengPeng7/BiRefNet_lite'
-        
-        # Ensure cache dir exists
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        # Get expected total size from HuggingFace API (with timeout)
-        total_bytes = 170 * 1024 * 1024  # fallback: ~170MB
-        try:
-            from huggingface_hub import HfApi
-            api = HfApi()
-            info = api.repo_info(repo_id, files_metadata=True)
-            api_total = sum((s.size or 0) for s in info.siblings)
-            if api_total > 0:
-                total_bytes = api_total
-            logger.info(f"Model total size from API: {total_bytes / 1024 / 1024:.0f} MB")
-        except Exception as e:
-            logger.warning(f"Could not get model size from API (using fallback): {e}")
-        
-        # Measure initial cache size
-        def get_dir_size(path):
-            total = 0
-            try:
-                for root, dirs, files in os.walk(path):
-                    for f in files:
-                        try:
-                            total += os.path.getsize(os.path.join(root, f))
-                        except OSError:
-                            pass
-            except Exception:
-                pass
-            return total
-        
-        initial_size = get_dir_size(cache_dir)
-        download_done = threading.Event()
-        download_error = [None]
-        
-        def do_download():
-            try:
-                from huggingface_hub import snapshot_download
-                logger.info(f"Starting snapshot_download to {cache_dir}")
-                snapshot_download(
-                    repo_id,
-                    cache_dir=cache_dir,
-                    local_files_only=False
-                )
-                logger.info("snapshot_download completed successfully")
-            except Exception as e:
-                logger.error(f"snapshot_download failed: {e}")
-                download_error[0] = e
-            finally:
-                download_done.set()
-        
-        def monitor():
-            last_pct = -1
-            while not download_done.is_set():
-                try:
-                    current_size = get_dir_size(cache_dir) - initial_size
-                    pct = min(99, int(current_size * 100 / max(total_bytes, 1)))
-                    if pct != last_pct:
-                        mb_done = current_size / (1024 * 1024)
-                        mb_total = total_bytes / (1024 * 1024)
-                        sys.stderr.write(f"DOWNLOAD_PROGRESS:{pct}:{mb_done:.0f}:{mb_total:.0f}\n")
-                        sys.stderr.flush()
-                        last_pct = pct
-                except Exception:
-                    pass
-                download_done.wait(timeout=0.5)
-        
-        dl_thread = threading.Thread(target=do_download, daemon=True)
-        mon_thread = threading.Thread(target=monitor, daemon=True)
-        
-        dl_thread.start()
-        mon_thread.start()
-        
-        dl_thread.join()
-        download_done.set()
-        mon_thread.join(timeout=2)
-        
-        if download_error[0]:
-            logger.error(f"Download with progress failed: {download_error[0]}")
-            sys.stderr.write(f"DOWNLOAD_ERROR: {download_error[0]}\n")
-            sys.stderr.flush()
-            # Fallback: direct download without progress tracking
-            logger.info("Trying fallback download via from_pretrained...")
-            from transformers import AutoModelForImageSegmentation
-            self._model = AutoModelForImageSegmentation.from_pretrained(
-                'ZhengPeng7/BiRefNet_lite',
-                trust_remote_code=True,
-                cache_dir=cache_dir
-            )
-            return
-        
-        sys.stderr.write("DOWNLOAD_PROGRESS:100\n")
-        sys.stderr.flush()
-        logger.info("Model download complete")
     
     def _preprocess_cv2(self, image, input_size):
         """Ultra-fast preprocessing with OpenCV"""
