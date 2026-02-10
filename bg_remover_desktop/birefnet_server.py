@@ -26,101 +26,86 @@ if not getattr(sys, 'frozen', False):
 
 
 def _get_cache_dir():
-    """Get the model cache directory based on environment"""
+    """Get model cache directory (matches birefnet_pytorch.py logic)"""
     if getattr(sys, 'frozen', False):
-        bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
-        bundled_cache = os.path.join(bundle_dir, 'model_cache')
-        if os.path.exists(bundled_cache):
-            return bundled_cache
         return os.path.join(os.path.expanduser('~'), '.sallulabs', 'model_cache')
     else:
         return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.model_cache')
 
 
-def _is_model_cached(cache_dir):
-    """Check if model is already downloaded in cache"""
-    try:
-        from transformers import AutoModelForImageSegmentation
-        AutoModelForImageSegmentation.from_pretrained(
-            'ZhengPeng7/BiRefNet_lite',
-            trust_remote_code=True,
-            cache_dir=cache_dir,
-            local_files_only=True
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _get_dir_size(path):
-    """Get total size of a directory in bytes"""
+def _get_dir_size(dir_path):
+    """Get total size of all files in directory tree"""
     total = 0
-    try:
-        for dp, _, filenames in os.walk(path):
-            for f in filenames:
-                fp = os.path.join(dp, f)
-                try:
-                    total += os.path.getsize(fp)
-                except OSError:
-                    pass
-    except OSError:
-        pass
+    for dirpath, _, filenames in os.walk(dir_path):
+        for f in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, f))
+            except OSError:
+                pass
     return total
 
 
-def _download_model_with_progress(cache_dir):
-    """Download model while reporting progress via stdout JSON"""
-    # Expected size: BiRefNet_lite is ~44MB of model files + metadata
-    EXPECTED_SIZE_BYTES = 46 * 1024 * 1024
+def _is_model_cached(cache_dir):
+    """Check if model.safetensors exists and is large enough to be complete"""
+    for root, _, files in os.walk(cache_dir):
+        if 'model.safetensors' in files:
+            fp = os.path.join(root, 'model.safetensors')
+            try:
+                if os.path.getsize(fp) > 10 * 1024 * 1024:
+                    return True
+            except OSError:
+                pass
+    return False
 
-    print(json.dumps({
-        "status": "downloading",
-        "progress": 0,
-        "message": "Downloading AI model (first time only)..."
-    }), flush=True)
 
-    result = {"model": None, "error": None, "done": False}
+def _ensure_model_downloaded(cache_dir):
+    """Download model if not cached, reporting progress via stdout JSON"""
+    os.makedirs(cache_dir, exist_ok=True)
 
-    def do_download():
+    if _is_model_cached(cache_dir):
+        return
+
+    sys.stderr.write("Model not cached — downloading for first launch...\n")
+    sys.stderr.flush()
+
+    EXPECTED_BYTES = 48 * 1024 * 1024  # ~48 MB expected total
+    initial_size = _get_dir_size(cache_dir)
+    done = threading.Event()
+    error_holder = [None]
+
+    print(json.dumps({"status": "downloading", "progress": 0}), flush=True)
+
+    def _download():
         try:
-            from transformers import AutoModelForImageSegmentation
-            model = AutoModelForImageSegmentation.from_pretrained(
-                'ZhengPeng7/BiRefNet_lite',
-                trust_remote_code=True,
-                cache_dir=cache_dir
-            )
-            result["model"] = model
+            from huggingface_hub import snapshot_download
+            snapshot_download('ZhengPeng7/BiRefNet_lite', cache_dir=cache_dir)
         except Exception as e:
-            result["error"] = str(e)
+            error_holder[0] = e
         finally:
-            result["done"] = True
+            done.set()
 
-    t = threading.Thread(target=do_download, daemon=True)
-    t.start()
+    thread = threading.Thread(target=_download, daemon=True)
+    thread.start()
 
-    last_progress = -1
-    while not result["done"]:
-        time.sleep(0.8)
+    last_pct = -1
+    while not done.is_set():
         current_size = _get_dir_size(cache_dir)
-        progress = min(95, int(current_size / EXPECTED_SIZE_BYTES * 100))
-        if progress != last_progress:
-            print(json.dumps({
-                "status": "downloading",
-                "progress": progress,
-                "message": f"Downloading AI model... {progress}%"
-            }), flush=True)
-            last_progress = progress
+        downloaded = current_size - initial_size
+        pct = max(0, min(95, int(downloaded / EXPECTED_BYTES * 100)))
+        if pct != last_pct:
+            print(json.dumps({"status": "downloading", "progress": pct}), flush=True)
+            last_pct = pct
+        done.wait(timeout=0.5)
 
-    if result["error"]:
-        raise Exception(result["error"])
+    thread.join()
 
-    print(json.dumps({
-        "status": "downloading",
-        "progress": 100,
-        "message": "Download complete! Loading model..."
-    }), flush=True)
+    if error_holder[0]:
+        print(json.dumps({"status": "download_error", "error": str(error_holder[0])}), flush=True)
+        raise error_holder[0]
 
-    return result["model"]
+    print(json.dumps({"status": "downloading", "progress": 100}), flush=True)
+    sys.stderr.write("Model download complete.\n")
+    sys.stderr.flush()
 
 
 class BiRefNetServer:
@@ -129,34 +114,24 @@ class BiRefNetServer:
         self.load_model()
     
     def load_model(self):
-        """Load model once at startup, with download progress on first run"""
+        """Load model once at startup"""
         try:
             cache_dir = _get_cache_dir()
-            os.makedirs(cache_dir, exist_ok=True)
-
+            _ensure_model_downloaded(cache_dir)
+            
+            sys.stderr.write("Loading AI model...\n")
+            sys.stderr.flush()
             load_start = time.time()
-
-            if _is_model_cached(cache_dir):
-                sys.stderr.write("Loading AI model from cache...\n")
-                sys.stderr.flush()
-                print(json.dumps({"status": "loading", "message": "Loading AI model..."}), flush=True)
-                from birefnet_model import BiRefNetLite
-                self.model = BiRefNetLite()
-            else:
-                sys.stderr.write("Model not cached, downloading...\n")
-                sys.stderr.flush()
-                # Download with progress, then load via BiRefNetLite (which uses cached model)
-                _download_model_with_progress(cache_dir)
-                print(json.dumps({"status": "loading", "message": "Initializing AI engine..."}), flush=True)
-                from birefnet_model import BiRefNetLite
-                self.model = BiRefNetLite()
+            
+            from birefnet_model import BiRefNetLite
+            self.model = BiRefNetLite()
             
             load_time = time.time() - load_start
-            sys.stderr.write(f"BiRefNet server ready ({load_time:.1f}s)\n")
+            sys.stderr.write(f"✅ BiRefNet server ready ({load_time:.1f}s)\n")
             sys.stderr.flush()
             print(json.dumps({"status": "ready", "message": "Model loaded"}), flush=True)
         except Exception as e:
-            sys.stderr.write(f"Model load failed: {e}\n")
+            sys.stderr.write(f"❌ Model load failed: {e}\n")
             sys.stderr.flush()
             print(json.dumps({"status": "error", "error": str(e)}), flush=True)
             sys.exit(1)

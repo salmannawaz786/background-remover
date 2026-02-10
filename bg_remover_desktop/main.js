@@ -464,27 +464,21 @@ function startBiRefNetServer() {
             if (line.trim()) {
                 try {
                     const msg = JSON.parse(line);
-                    if (msg.status === 'ready') {
+                    if (msg.status === 'downloading') {
+                        console.log(`Downloading model: ${msg.progress}%`);
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('download-progress', msg);
+                        }
+                    } else if (msg.status === 'download_error') {
+                        console.error('Model download failed:', msg.error);
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('download-progress', { status: 'download_error', error: msg.error });
+                        }
+                    } else if (msg.status === 'ready') {
                         serverReady = true;
                         console.log('✅ BiRefNet server ready');
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send('model-ready', 'birefnet');
-                        }
-                    } else if (msg.status === 'downloading') {
-                        console.log(`⬇️ Model download: ${msg.progress}%`);
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send('model-download-progress', {
-                                progress: msg.progress,
-                                message: msg.message || 'Downloading...'
-                            });
-                        }
-                    } else if (msg.status === 'loading') {
-                        console.log('⏳ Loading model...');
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send('model-download-progress', {
-                                progress: 100,
-                                message: msg.message || 'Loading AI engine...'
-                            });
                         }
                     }
                 } catch (e) {
@@ -630,9 +624,9 @@ ipcMain.handle('remove-background', async (event, { filePath, hdMode }) => {
         console.log('Device:', deviceInfo.gpuName, '| Platform:', deviceInfo.platform);
         console.log('Using persistent BiRefNet server');
         
-        // Wait for server to be ready (max 10min on first run for model download)
+        // Wait for server to be ready (max 60s on first run for model download)
         let waitTime = 0;
-        while (!serverReady && waitTime < 600000) {
+        while (!serverReady && waitTime < 60000) {
             await new Promise(r => setTimeout(r, 500));
             waitTime += 500;
         }

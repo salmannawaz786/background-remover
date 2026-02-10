@@ -33,29 +33,18 @@ jobs:
         shell: python
         run: |
           import subprocess, sys, os
-          # Exclude unused torch modules to reduce bundle size
-          excludes = [
-              'torch.distributed', 'torch.testing', 'torch.utils.bottleneck',
-              'torch.utils.tensorboard', 'torch.cuda.nccl',
-              'torch.backends.cudnn', 'torch.backends.cusparselt',
-              'torchvision.datasets', 'torchvision.models.video',
-              'torchvision.models.detection', 'torchvision.models.segmentation',
-              'torchvision.models.optical_flow',
-              'transformers.agents', 'transformers.pipelines',
-              'transformers.training_utils',
-              'unittest', 'pytest', 'IPython', 'jupyter',
-              'tkinter', 'matplotlib', 'scipy',
-          ]
           cmd = [
               sys.executable, '-m', 'PyInstaller',
               '--name', 'birefnet_server',
-              '--onedir', '--noconfirm', '--clean',
+              '--onedir', '--noconfirm', '--clean', '--strip',
               '--paths', '..',
+              # --- Hidden imports ---
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
               '--hidden-import', 'torchvision',
               '--hidden-import', 'transformers',
+              '--hidden-import', 'huggingface_hub',
               '--hidden-import', 'PIL',
               '--hidden-import', 'numpy',
               '--hidden-import', 'cv2',
@@ -63,21 +52,41 @@ jobs:
               '--hidden-import', 'einops',
               '--hidden-import', 'kornia',
               '--hidden-import', 'timm',
+              # --- Collect needed submodules ---
               '--collect-submodules', 'torch',
               '--collect-submodules', 'transformers',
               '--collect-submodules', 'safetensors',
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
+              # --- Exclude unused torch modules to reduce size ---
+              '--exclude-module', 'torch.distributed',
+              '--exclude-module', 'torch._dynamo',
+              '--exclude-module', 'torch._inductor',
+              '--exclude-module', 'torch.onnx',
+              '--exclude-module', 'torch.profiler',
+              '--exclude-module', 'torch.ao',
+              '--exclude-module', 'torch.compiler',
+              '--exclude-module', 'torch.export',
+              '--exclude-module', 'torch.package',
+              '--exclude-module', 'torch.testing',
+              # --- Exclude unused third-party ---
+              '--exclude-module', 'tensorboard',
+              '--exclude-module', 'matplotlib',
+              '--exclude-module', 'pytest',
+              '--exclude-module', 'IPython',
+              '--exclude-module', 'tkinter',
+              '--exclude-module', 'setuptools',
+              '--exclude-module', 'pip',
+              '--exclude-module', 'scipy',
+              'birefnet_server.py'
           ]
-          for mod in excludes:
-              cmd += ['--exclude-module', mod]
-          cmd.append('birefnet_server.py')
           print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
-              print(f'PyInstaller output: {count} files in {dist_dir}')
+              total = sum(os.path.getsize(os.path.join(dp,f)) for dp,_,fns in os.walk(dist_dir) for f in fns)
+              print(f'PyInstaller output: {count} files, {total/1024/1024:.0f} MB')
           else:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
@@ -123,7 +132,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          cache-dependency-path: './bg_remover_desktop/package-lock.json'
 
       - name: Install Node dependencies
         working-directory: ./bg_remover_desktop
@@ -174,29 +183,18 @@ jobs:
         shell: python
         run: |
           import subprocess, sys, os
-          # Exclude unused torch modules to reduce bundle size
-          excludes = [
-              'torch.distributed', 'torch.testing', 'torch.utils.bottleneck',
-              'torch.utils.tensorboard', 'torch.cuda.nccl',
-              'torch.backends.cudnn', 'torch.backends.cusparselt',
-              'torchvision.datasets', 'torchvision.models.video',
-              'torchvision.models.detection', 'torchvision.models.segmentation',
-              'torchvision.models.optical_flow',
-              'transformers.agents', 'transformers.pipelines',
-              'transformers.training_utils',
-              'unittest', 'pytest', 'IPython', 'jupyter',
-              'tkinter', 'matplotlib', 'scipy',
-          ]
           cmd = [
               sys.executable, '-m', 'PyInstaller',
               '--name', 'birefnet_server',
-              '--onedir', '--noconfirm', '--clean',
+              '--onedir', '--noconfirm', '--clean', '--strip',
               '--paths', '..',
+              # --- Hidden imports ---
               '--hidden-import', 'birefnet_model',
               '--hidden-import', 'birefnet_pytorch',
               '--hidden-import', 'torch',
               '--hidden-import', 'torchvision',
               '--hidden-import', 'transformers',
+              '--hidden-import', 'huggingface_hub',
               '--hidden-import', 'PIL',
               '--hidden-import', 'numpy',
               '--hidden-import', 'cv2',
@@ -204,21 +202,41 @@ jobs:
               '--hidden-import', 'einops',
               '--hidden-import', 'kornia',
               '--hidden-import', 'timm',
+              # --- Collect needed submodules ---
               '--collect-submodules', 'torch',
               '--collect-submodules', 'transformers',
               '--collect-submodules', 'safetensors',
               '--collect-submodules', 'timm',
               '--collect-binaries', 'torch',
+              # --- Exclude unused torch modules to reduce size ---
+              '--exclude-module', 'torch.distributed',
+              '--exclude-module', 'torch._dynamo',
+              '--exclude-module', 'torch._inductor',
+              '--exclude-module', 'torch.onnx',
+              '--exclude-module', 'torch.profiler',
+              '--exclude-module', 'torch.ao',
+              '--exclude-module', 'torch.compiler',
+              '--exclude-module', 'torch.export',
+              '--exclude-module', 'torch.package',
+              '--exclude-module', 'torch.testing',
+              # --- Exclude unused third-party ---
+              '--exclude-module', 'tensorboard',
+              '--exclude-module', 'matplotlib',
+              '--exclude-module', 'pytest',
+              '--exclude-module', 'IPython',
+              '--exclude-module', 'tkinter',
+              '--exclude-module', 'setuptools',
+              '--exclude-module', 'pip',
+              '--exclude-module', 'scipy',
+              'birefnet_server.py'
           ]
-          for mod in excludes:
-              cmd += ['--exclude-module', mod]
-          cmd.append('birefnet_server.py')
           print('Running PyInstaller...')
           result = subprocess.run(cmd, check=True)
           dist_dir = os.path.join('dist', 'birefnet_server')
           if os.path.isdir(dist_dir):
               count = sum(len(files) for _, _, files in os.walk(dist_dir))
-              print(f'PyInstaller output: {count} files in {dist_dir}')
+              total = sum(os.path.getsize(os.path.join(dp,f)) for dp,_,fns in os.walk(dist_dir) for f in fns)
+              print(f'PyInstaller output: {count} files, {total/1024/1024:.0f} MB')
           else:
               print(f'ERROR: {dist_dir} does not exist!')
               print('Contents of dist/:', os.listdir('dist') if os.path.isdir('dist') else 'dist/ not found')
@@ -263,7 +281,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          cache-dependency-path: './bg_remover_desktop/package-lock.json'
 
       - name: Install Node dependencies
         working-directory: ./bg_remover_desktop

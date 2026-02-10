@@ -476,23 +476,31 @@ function tryHideSplash() {
     }, 500);
 }
 
-// Listen for model download progress from main process
-window.electronAPI.onModelDownloadProgress((data) => {
+// Listen for model download progress (first launch only)
+window.electronAPI.onDownloadProgress((data) => {
     const downloadEl = document.getElementById('splashDownload');
     const fillEl = document.getElementById('splashProgressFill');
-    const textEl = document.getElementById('splashProgressText');
-    const loadingTextEl = document.getElementById('splashLoadingText');
+    const loadingText = document.getElementById('splashLoadingText');
+    const tipRow = document.getElementById('splashTipRow');
 
-    if (downloadEl && fillEl && textEl) {
-        downloadEl.style.display = 'block';
-        fillEl.style.width = `${data.progress}%`;
-        textEl.textContent = data.message || `Downloading... ${data.progress}%`;
+    if (!downloadEl) return;
+
+    if (data.status === 'download_error') {
+        loadingText.textContent = 'Download failed — please check your internet and restart';
+        downloadEl.style.display = 'none';
+        return;
     }
-    if (loadingTextEl) {
-        if (data.progress < 100) {
-            loadingTextEl.textContent = 'First-time setup';
-        } else {
-            loadingTextEl.textContent = 'Almost ready...';
+
+    if (data.progress !== undefined) {
+        downloadEl.style.display = 'block';
+        if (tipRow) tipRow.style.display = 'none';
+        loadingText.textContent = `Downloading AI Model... ${data.progress}%`;
+        fillEl.style.width = `${data.progress}%`;
+
+        if (data.progress >= 100) {
+            loadingText.textContent = 'Loading AI Engine...';
+            downloadEl.style.display = 'none';
+            if (tipRow) tipRow.style.display = 'flex';
         }
     }
 });
