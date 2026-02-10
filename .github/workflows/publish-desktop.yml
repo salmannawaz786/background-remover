@@ -123,7 +123,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: './bg_remover_desktop/package-lock.json'
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Install Node dependencies
         working-directory: ./bg_remover_desktop
@@ -263,7 +263,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: './bg_remover_desktop/package-lock.json'
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Install Node dependencies
         working-directory: ./bg_remover_desktop
