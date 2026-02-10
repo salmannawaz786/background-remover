@@ -23,11 +23,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: "./bg remover desktop"
+        working-directory: "./bg_remover_desktop"
 
       - name: Build Windows app
         run: npx electron-builder --win --publish never
-        working-directory: "./bg remover desktop"
+        working-directory: "./bg_remover_desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -36,9 +36,9 @@ jobs:
         with:
           name: BG-Remover-Windows
           path: |
-            ./bg remover desktop/dist/*.exe
-            ./bg remover desktop/dist/*.exe.blockmap
-            ./bg remover desktop/dist/latest.yml
+            ./bg_remover_desktop/dist/*.exe
+            ./bg_remover_desktop/dist/*.exe.blockmap
+            ./bg_remover_desktop/dist/latest.yml
           retention-days: 30
 
   build-mac:
@@ -54,11 +54,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: "./bg remover desktop"
+        working-directory: "./bg_remover_desktop"
 
       - name: Build macOS app (arm64 + x64)
         run: npx electron-builder --mac --publish never
-        working-directory: "./bg remover desktop"
+        working-directory: "./bg_remover_desktop"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -68,11 +68,11 @@ jobs:
         with:
           name: BG-Remover-macOS
           path: |
-            ./bg remover desktop/dist/*.dmg
-            ./bg remover desktop/dist/*.dmg.blockmap
-            ./bg remover desktop/dist/*.zip
-            ./bg remover desktop/dist/*.zip.blockmap
-            ./bg remover desktop/dist/latest-mac*.yml
+            ./bg_remover_desktop/dist/*.dmg
+            ./bg_remover_desktop/dist/*.dmg.blockmap
+            ./bg_remover_desktop/dist/*.zip
+            ./bg_remover_desktop/dist/*.zip.blockmap
+            ./bg_remover_desktop/dist/latest-mac*.yml
           retention-days: 30
 
   release:
