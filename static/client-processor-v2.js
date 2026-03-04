@@ -160,35 +160,69 @@ const ClientProcessor = (() => {
         let arrayBuffer = await getCachedModel(modelKey);
         
         if (!arrayBuffer) {
-            // Download with progress
+            // Download with timeout and progress
             console.log(`[Model] Downloading ${modelKey}...`);
-            const response = await fetch(modelUrl);
-            const reader = response.body.getReader();
-            const contentLength = +response.headers.get('Content-Length') || 0;
             
-            let received = 0;
-            const chunks = [];
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(value);
-                received += value.length;
-                if (onProgress && contentLength) {
-                    onProgress(received / contentLength);
+            try {
+                // Add timeout to prevent hanging on slow networks
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    controller.abort();
+                    console.warn(`[Model] Download timeout for ${modelKey} (60s)`);
+                }, 60000); // 60 second timeout
+                
+                const response = await fetch(modelUrl, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
+                
+                const reader = response.body.getReader();
+                const contentLength = +response.headers.get('Content-Length') || 0;
+                
+                let received = 0;
+                const chunks = [];
+                const startTime = Date.now();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    received += value.length;
+                    
+                    if (onProgress && contentLength) {
+                        onProgress(received / contentLength);
+                    }
+                    
+                    // Check if download is taking too long (>90 seconds total)
+                    if (Date.now() - startTime > 90000) {
+                        throw new Error('Download taking too long, using server instead');
+                    }
+                }
+                
+                arrayBuffer = new Uint8Array(received);
+                let pos = 0;
+                for (const chunk of chunks) {
+                    arrayBuffer.set(chunk, pos);
+                    pos += chunk.length;
+                }
+                arrayBuffer = arrayBuffer.buffer;
+                
+                console.log(`[Model] Downloaded ${modelKey}: ${(received/1e6).toFixed(1)}MB`);
+                
+                // Cache for next time
+                await cacheModel(modelKey, arrayBuffer);
+                
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.warn(`[Model] Download aborted for ${modelKey}`);
+                } else {
+                    console.error(`[Model] Download failed for ${modelKey}:`, error.message);
+                }
+                throw error; // Re-throw to trigger server fallback
             }
-            
-            arrayBuffer = new Uint8Array(received);
-            let pos = 0;
-            for (const chunk of chunks) {
-                arrayBuffer.set(chunk, pos);
-                pos += chunk.length;
-            }
-            arrayBuffer = arrayBuffer.buffer;
-            
-            // Cache for next time
-            await cacheModel(modelKey, arrayBuffer);
         }
         
         // Create ONNX session
@@ -196,13 +230,18 @@ const ClientProcessor = (() => {
             throw new Error('ONNX Runtime not loaded');
         }
         
-        const session = await ort.InferenceSession.create(arrayBuffer, {
-            executionProviders: ['wasm'],
-            graphOptimizationLevel: 'all'
-        });
-        
-        console.log(`[Model] ${modelKey} ready`);
-        return session;
+        try {
+            const session = await ort.InferenceSession.create(arrayBuffer, {
+                executionProviders: ['wasm'],
+                graphOptimizationLevel: 'all'
+            });
+            
+            console.log(`[Model] ${modelKey} ready`);
+            return session;
+        } catch (error) {
+            console.error(`[Model] Session creation failed for ${modelKey}:`, error);
+            throw error;
+        }
     }
 
     // ── RVM Inference ─────────────────────────────────────────────────────
