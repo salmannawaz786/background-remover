@@ -44,9 +44,11 @@ RMBG_CONFIG = {
     'input_size': 1024,
 }
 
-# ── Fast Face Detection (optimized OpenCV) ──────────────────────────────────
+# ── Multi-Stage Person Detection (Face + Upper Body) ───────────────────────
 
 _face_cascade = None
+_upperbody_cascade = None
+_fullbody_cascade = None
 
 def _get_face_cascade():
     global _face_cascade
@@ -59,42 +61,104 @@ def _get_face_cascade():
         logger.info("Face detection cascade loaded")
     return _face_cascade
 
+def _get_upperbody_cascade():
+    global _upperbody_cascade
+    if _upperbody_cascade is not None:
+        return _upperbody_cascade
+    with _face_lock:
+        if _upperbody_cascade is not None:
+            return _upperbody_cascade
+        _upperbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
+        logger.info("Upper body detection cascade loaded")
+    return _upperbody_cascade
+
+def _get_fullbody_cascade():
+    global _fullbody_cascade
+    if _fullbody_cascade is not None:
+        return _fullbody_cascade
+    with _face_lock:
+        if _fullbody_cascade is not None:
+            return _fullbody_cascade
+        _fullbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+        logger.info("Full body detection cascade loaded")
+    return _fullbody_cascade
+
 
 def detect_person(image: Image.Image) -> bool:
     """
-    Fast face detection to determine if image contains a person.
-    Returns True if face detected, False otherwise.
-    Optimized to run in <100ms.
+    Multi-stage person detection to determine if image contains a person.
+    Uses face, upper body, and full body detection for high accuracy.
+    
+    Detection happens BEFORE any model processing.
+    Returns True only if person detected with high confidence.
     """
     t0 = time.time()
-    cascade = _get_face_cascade()
     
     # Convert to grayscale numpy array
     img_np = np.array(image.convert('RGB'))
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
     
-    # Resize to max 320px for very fast detection
+    # Resize to max 400px for better detection accuracy
     h, w = gray.shape
-    max_size = 320
+    max_size = 400
     scale = min(max_size / max(h, w), 1.0)
     if scale < 1.0:
         new_w = int(w * scale)
         new_h = int(h * scale)
         gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     
-    # Detect faces with improved accuracy
-    faces = cascade.detectMultiScale(
+    # Stage 1: Face Detection (most accurate)
+    face_cascade = _get_face_cascade()
+    faces = face_cascade.detectMultiScale(
         gray,
-        scaleFactor=1.1,  # Smaller steps = more accurate
-        minNeighbors=5,   # Higher = more accurate, less false positives
-        minSize=(30, 30), # Larger min = better person detection
+        scaleFactor=1.08,  # Very fine steps = highest accuracy
+        minNeighbors=6,    # Very strict = fewer false positives
+        minSize=(40, 40),  # Ignore very small faces
         flags=cv2.CASCADE_SCALE_IMAGE
     )
     
-    is_person = len(faces) > 0
+    # If face found, definitely a person
+    if len(faces) > 0:
+        elapsed = time.time() - t0
+        logger.info(f"✓ PERSON detected: {len(faces)} face(s) found ({elapsed:.3f}s)")
+        return True
+    
+    # Stage 2: Upper Body Detection (for no face visible)
+    upperbody_cascade = _get_upperbody_cascade()
+    upperbodies = upperbody_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=4,
+        minSize=(60, 60),
+        flags=cv2.CASCADE_SCALE_IMAGE
+    )
+    
+    # If upper body found, likely a person
+    if len(upperbodies) > 0:
+        elapsed = time.time() - t0
+        logger.info(f"✓ PERSON detected: {len(upperbodies)} upper body(ies) found ({elapsed:.3f}s)")
+        return True
+    
+    # Stage 3: Full Body Detection (for full person shots)
+    fullbody_cascade = _get_fullbody_cascade()
+    fullbodies = fullbody_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=3,
+        minSize=(80, 80),
+        flags=cv2.CASCADE_SCALE_IMAGE
+    )
+    
+    # If full body found, definitely a person
+    if len(fullbodies) > 0:
+        elapsed = time.time() - t0
+        logger.info(f"✓ PERSON detected: {len(fullbodies)} full body(ies) found ({elapsed:.3f}s)")
+        return True
+    
+    # No person detected
     elapsed = time.time() - t0
-    logger.info(f"Face detection: {'person' if is_person else 'object'} ({elapsed:.3f}s, {len(faces)} faces)")
-    return is_person
+    logger.info(f"✗ OBJECT detected: No person features found ({elapsed:.3f}s)")
+    return False
 
 
 # ── Download helper ──────────────────────────────────────────────────────────
