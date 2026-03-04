@@ -15,18 +15,18 @@ const ClientProcessor = (() => {
     // Model configs
     const MODELS = {
         rvm: {
-            id: 'rvm-mobilenetv3-v2',
+            id: 'rvm-mobilenetv3',
             url: 'https://huggingface.co/eafish/web-onnx/resolve/main/rvm_mobilenetv3_fp32.onnx',
             size: 15  // MB
         },
         rmbg: {
-            id: 'rmbg-1.4-quantized-v2', 
+            id: 'rmbg-1.4-quantized', 
             url: 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx',
             size: 40  // MB
         }
     };
 
-    const CACHE_NAME = 'bg-remover-models-v3';
+    const CACHE_NAME = 'bg-remover-models-v2';
     
     // State
     let _rvmSession = null;
