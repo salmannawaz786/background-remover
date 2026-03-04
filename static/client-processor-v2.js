@@ -577,54 +577,71 @@ const ClientProcessor = (() => {
 
         async processImage(imageElement, mode = 'fast') {
             /**
-             * CRITICAL ROUTING LOGIC:
-             * 1. Detect if image contains a person
-             * 2. Route to correct model:
-             *    - Person + RVM ready → RVM locally
-             *    - Person + RVM not ready → SERVER (never use RMBG for persons)
-             *    - Object + RMBG ready → RMBG locally
-             *    - Object + RMBG not ready → SERVER + start RMBG download
+             * FINAL ROUTING LOGIC (FIXED):
+             * 
+             * PRO MODE (high quality):
+             * - Always use RMBG-1.4 for both persons AND objects
+             * - If RMBG not ready → use SERVER + start RMBG download
+             * 
+             * FAST MODE (speed):
+             * - Person detected → use RVM if ready, otherwise SERVER
+             * - Object detected → use RMBG if ready, otherwise SERVER
              */
             
-            // First, detect person vs object
+            // First, detect person vs object (only needed for fast mode)
             const isPerson = await detectPerson(imageElement);
-            const downsample = mode === 'fast' ? 0.2 : 0.5;
             
-            if (isPerson) {
-                // === PERSON DETECTED ===
-                // Only use RVM if it's ready, otherwise SERVER
-                // NEVER fall back to RMBG for persons
-                if (_rvmReady && _rvmSession) {
-                    try {
-                        const result = await runRVM(imageElement, downsample);
-                        return { success: true, dataUrl: result, model: 'rvm', isPerson: true };
-                    } catch (e) {
-                        return { success: false, needsModel: 'rvm', isPerson: true, error: e.message };
-                    }
-                } else {
-                    // RVM not ready - use server, start downloading RVM
-                    if (!_rvmDownloading && !_rvmReady) {
-                        this.loadRVM();
-                    }
-                    return { success: false, needsModel: 'rvm', isPerson: true };
-                }
-            } else {
-                // === OBJECT DETECTED ===
-                // Only use RMBG if it's ready, otherwise SERVER
-                // NEVER fall back to RVM for objects
+            if (mode === 'pro') {
+                // === PRO MODE: ALWAYS use RMBG-1.4 ===
                 if (_rmbgReady && _rmbgSession) {
                     try {
                         const result = await runRMBG(imageElement);
-                        return { success: true, dataUrl: result, model: 'rmbg', isPerson: false };
+                        return { success: true, dataUrl: result, model: 'rmbg', isPerson, mode: 'pro' };
                     } catch (e) {
-                        return { success: false, needsModel: 'rmbg', isPerson: false, error: e.message };
+                        return { success: false, needsModel: 'rmbg', isPerson, mode: 'pro', error: e.message };
                     }
                 } else {
                     // RMBG not ready - use server, start downloading RMBG
                     if (!_rmbgDownloading && !_rmbgReady) {
                         this.loadRMBG();
                     }
-                    return { success: false, needsModel: 'rmbg', isPerson: false };
+                    return { success: false, needsModel: 'rmbg', isPerson, mode: 'pro' };
+                }
+            } else {
+                // === FAST MODE: Smart routing ===
+                if (isPerson) {
+                    // Person detected → use RVM for speed
+                    if (_rvmReady && _rvmSession) {
+                        try {
+                            const downsample = 0.2; // Fast mode uses 0.2 downsample
+                            const result = await runRVM(imageElement, downsample);
+                            return { success: true, dataUrl: result, model: 'rvm', isPerson: true, mode: 'fast' };
+                        } catch (e) {
+                            return { success: false, needsModel: 'rvm', isPerson: true, mode: 'fast', error: e.message };
+                        }
+                    } else {
+                        // RVM not ready - use server, start downloading RVM
+                        if (!_rvmDownloading && !_rvmReady) {
+                            this.loadRVM();
+                        }
+                        return { success: false, needsModel: 'rvm', isPerson: true, mode: 'fast' };
+                    }
+                } else {
+                    // Object detected → use RMBG
+                    if (_rmbgReady && _rmbgSession) {
+                        try {
+                            const result = await runRMBG(imageElement);
+                            return { success: true, dataUrl: result, model: 'rmbg', isPerson: false, mode: 'fast' };
+                        } catch (e) {
+                            return { success: false, needsModel: 'rmbg', isPerson: false, mode: 'fast', error: e.message };
+                        }
+                    } else {
+                        // RMBG not ready - use server, start downloading RMBG
+                        if (!_rmbgDownloading && !_rmbgReady) {
+                            this.loadRMBG();
+                        }
+                        return { success: false, needsModel: 'rmbg', isPerson: false, mode: 'fast' };
+                    }
                 }
             }
         },
