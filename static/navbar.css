@@ -676,18 +676,19 @@
   position: fixed;
   top: 0;
   right: -100%;
-  width: 100%;
-  max-width: 100%;
+  width: 85%;
+  max-width: 320px;
   height: 100vh;
   background: rgba(240, 240, 240, 1);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   z-index: 1001;
-  padding: 6rem 2rem 2rem;
+  padding: 6rem 1.5rem 2rem;
   overflow-y: auto;
   overflow-x: hidden;
   transition: right 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
   box-shadow: -4px 0 20px rgba(0, 0, 0, 0.1);
+  border-left: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 [data-theme="dark"] .mobile-menu {

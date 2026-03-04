@@ -67,7 +67,7 @@ try:
         logger.info("Using Firebase credentials from environment variable")
     else:
         # Use credentials file (for local development and Droplet)
-        cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json'))
+        cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS_PATH', 'serviceAccountKey.json'))
         logger.info("Using Firebase credentials from file")
     
     firebase_admin.initialize_app(cred)

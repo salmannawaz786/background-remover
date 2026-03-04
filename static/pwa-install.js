@@ -22,12 +22,10 @@ const PWAInstaller = (() => {
     // Register Service Worker
     async function registerSW() {
         if (!('serviceWorker' in navigator)) {
-            console.log('[PWA] Service Workers not supported');
             return;
         }
         try {
             const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-            console.log('[PWA] Service Worker registered, scope:', reg.scope);
 
             // Check for updates periodically
             setInterval(() => reg.update(), 60 * 60 * 1000); // every hour
@@ -41,9 +39,8 @@ const PWAInstaller = (() => {
         if (!navigator.storage || !navigator.storage.persist) return;
         try {
             const granted = await navigator.storage.persist();
-            console.log('[PWA] Persistent storage:', granted ? 'granted' : 'denied');
         } catch (e) {
-            console.log('[PWA] Persistent storage request failed:', e);
+            // Persistent storage request failed
         }
     }
 
@@ -85,14 +82,12 @@ const PWAInstaller = (() => {
             _isInstalled = isStandalone();
 
             if (_isInstalled) {
-                console.log('[PWA] Running as installed app');
                 localStorage.setItem('pwa-installed', 'true');
                 return;
             }
 
             // Never show install banner on phone screens
             if (isMobile()) {
-                console.log('[PWA] Mobile device — skipping install banner');
                 return;
             }
 
@@ -100,7 +95,6 @@ const PWAInstaller = (() => {
             window.addEventListener('beforeinstallprompt', (e) => {
                 e.preventDefault();
                 _deferredPrompt = e;
-                console.log('[PWA] Install prompt ready');
 
                 // Show navbar install buttons
                 const navbarInstallBtn = document.getElementById('navbar-install-btn');
@@ -118,7 +112,6 @@ const PWAInstaller = (() => {
                 _isInstalled = true;
                 _deferredPrompt = null;
                 hideInstallSection();
-                console.log('[PWA] App installed successfully');
             });
 
             // Wire up install button
@@ -157,12 +150,10 @@ const PWAInstaller = (() => {
 
         async promptInstall() {
             if (!_deferredPrompt) {
-                console.log('[PWA] No install prompt available');
                 return false;
             }
             _deferredPrompt.prompt();
             const result = await _deferredPrompt.userChoice;
-            console.log('[PWA] Install choice:', result.outcome);
             _deferredPrompt = null;
             hideInstallSection();
             return result.outcome === 'accepted';
