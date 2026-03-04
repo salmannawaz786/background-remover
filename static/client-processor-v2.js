@@ -1,33 +1,32 @@
 /**
- * Client-Side Background Remover v2
- * ==================================
+ * Client-Side Background Remover v2.1
+ * ====================================
  * Smart routing: Person → RVM, Object → RMBG
- * Uses Cache API for fast model storage (no IndexedDB lag)
+ * Uses Cache API for fast model storage
  * 
- * Flow:
- * 1. On first visit: download RVM (15MB) for persons
- * 2. On first object detected: download RMBG (40MB)
- * 3. While downloading: use server fallback
+ * CRITICAL ROUTING LOGIC:
+ * - Person detected + RVM ready → use RVM locally
+ * - Person detected + RVM not ready → use SERVER
+ * - Object detected + RMBG ready → use RMBG locally  
+ * - Object detected + RMBG not ready → use SERVER + start RMBG download
  */
 
 const ClientProcessor = (() => {
     // Model configs
     const MODELS = {
         rvm: {
-            id: 'rvm-mobilenetv3',
+            id: 'rvm-mobilenetv3-v2',
             url: 'https://huggingface.co/eafish/web-onnx/resolve/main/rvm_mobilenetv3_fp32.onnx',
-            size: 15,  // MB
-            type: 'person'
+            size: 15  // MB
         },
         rmbg: {
-            id: 'rmbg-1.4-quantized', 
+            id: 'rmbg-1.4-quantized-v2', 
             url: 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx',
-            size: 40,  // MB
-            type: 'object'
+            size: 40  // MB
         }
     };
 
-    const CACHE_NAME = 'bg-remover-models-v2';
+    const CACHE_NAME = 'bg-remover-models-v3';
     
     // State
     let _rvmSession = null;
@@ -38,6 +37,8 @@ const ClientProcessor = (() => {
     let _rmbgDownloading = false;
     let _faceDetector = null;
     let _faceDetectorSupported = false;
+    let _deviceInfo = { capable: true, isMobile: false };
+    let _initPromise = null;
 
     // ── Cache API helpers (faster than IndexedDB) ─────────────────────────
 
@@ -78,14 +79,13 @@ const ClientProcessor = (() => {
         }
     }
 
-    // ── Face Detection (fast person vs object) ────────────────────────────
+    // ── Face Detection (IMPROVED - stricter person detection) ─────────────
 
     async function initFaceDetector() {
         // Try browser's FaceDetector API first (Chrome 70+)
         if ('FaceDetector' in window) {
             try {
-                // Check if FaceDetector is actually supported (some browsers have it but not enabled)
-                const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+                const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 3 });
                 _faceDetector = detector;
                 _faceDetectorSupported = true;
                 return true;
@@ -93,33 +93,36 @@ const ClientProcessor = (() => {
                 // Browser API not available
             }
         }
-        
-        // Fallback: simple heuristic (skin tone detection)
         _faceDetectorSupported = false;
         return false;
     }
 
     async function detectPerson(imageElement) {
-        const t0 = performance.now();
-        
+        // PRIORITY 1: Use browser FaceDetector API if available (most accurate)
         if (_faceDetector && _faceDetectorSupported) {
             try {
                 const faces = await _faceDetector.detect(imageElement);
-                const isPerson = faces.length > 0;
-                return isPerson;
+                if (faces.length > 0) {
+                    return true; // Definitely a person
+                }
+                // No face detected - could still be a person (back turned, etc)
+                // Fall through to heuristic check
             } catch (e) {
-                // Detection error
+                // Detection error, fall through
             }
         }
         
-        // Fallback: skin tone heuristic
-        return detectPersonBySkinTone(imageElement);
+        // PRIORITY 2: Strict skin tone + shape heuristic
+        // Only return TRUE if we're VERY confident it's a person
+        // When in doubt, return FALSE (use RMBG which works for everything)
+        return detectPersonStrict(imageElement);
     }
 
-    function detectPersonBySkinTone(imageElement) {
-        // Quick skin-tone detection heuristic
+    function detectPersonStrict(imageElement) {
+        // STRICT person detection - only return true if very confident
+        // Better to use RMBG (works for both) than misroute to RVM
         const canvas = document.createElement('canvas');
-        const size = 100;  // Sample at 100x100 for speed
+        const size = 150;
         canvas.width = size;
         canvas.height = size;
         const ctx = canvas.getContext('2d');
@@ -129,53 +132,170 @@ const ClientProcessor = (() => {
         const data = imageData.data;
         
         let skinPixels = 0;
+        let faceRegionSkin = 0;
         const total = size * size;
         
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i], g = data[i+1], b = data[i+2];
-            // Simple skin tone detection (works for various skin tones)
-            if (r > 95 && g > 40 && b > 20 &&
-                r > g && r > b &&
-                Math.abs(r - g) > 15 &&
-                r - g > 15 && r - b > 15) {
-                skinPixels++;
+        // Check skin tone in different regions
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const i = (y * size + x) * 4;
+                const r = data[i], g = data[i+1], b = data[i+2];
+                
+                // Stricter skin tone detection
+                // Must have: R > G > B, specific ranges, and not too saturated
+                const isSkin = (
+                    r > 100 && r < 255 &&
+                    g > 50 && g < 200 &&
+                    b > 30 && b < 180 &&
+                    r > g && g > b &&
+                    (r - g) > 10 && (r - g) < 80 &&
+                    (r - b) > 20 && (r - b) < 120
+                );
+                
+                if (isSkin) {
+                    skinPixels++;
+                    // Check if skin is in typical face region (upper-center)
+                    if (y < size * 0.6 && x > size * 0.25 && x < size * 0.75) {
+                        faceRegionSkin++;
+                    }
+                }
             }
         }
         
         const skinRatio = skinPixels / total;
-        const isPerson = skinRatio > 0.05;  // >5% skin pixels = likely person
+        const faceRegionRatio = faceRegionSkin / (size * 0.6 * size * 0.5);
+        
+        // STRICT: Need significant skin AND concentrated in face region
+        // Threshold raised from 5% to 12% overall AND 15% in face region
+        const isPerson = skinRatio > 0.12 && faceRegionRatio > 0.15;
+        
         return isPerson;
     }
 
-    // ── Model Loading ─────────────────────────────────────────────────────
+    // ── Download Progress Persistence ──────────────────────────────────────
+    
+    const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks for persistence
+    
+    function getDownloadProgress(modelKey) {
+        try {
+            const data = localStorage.getItem(`dl_progress_${modelKey}`);
+            return data ? JSON.parse(data) : null;
+        } catch { return null; }
+    }
+    
+    function saveDownloadProgress(modelKey, bytesReceived, totalBytes) {
+        try {
+            localStorage.setItem(`dl_progress_${modelKey}`, JSON.stringify({
+                received: bytesReceived,
+                total: totalBytes,
+                timestamp: Date.now()
+            }));
+        } catch {}
+    }
+    
+    function clearDownloadProgress(modelKey) {
+        try {
+            localStorage.removeItem(`dl_progress_${modelKey}`);
+        } catch {}
+    }
+    
+    async function cachePartialDownload(modelKey, chunks, bytesReceived) {
+        // Store partial download for resume capability
+        try {
+            const cache = await caches.open(CACHE_NAME + '-partial');
+            const combined = new Uint8Array(bytesReceived);
+            let pos = 0;
+            for (const chunk of chunks) {
+                combined.set(chunk, pos);
+                pos += chunk.length;
+            }
+            const response = new Response(combined.buffer, {
+                headers: { 
+                    'Content-Type': 'application/octet-stream',
+                    'X-Partial': 'true',
+                    'X-Bytes-Received': bytesReceived.toString()
+                }
+            });
+            await cache.put(modelKey, response);
+        } catch {}
+    }
+    
+    async function getPartialDownload(modelKey) {
+        try {
+            const cache = await caches.open(CACHE_NAME + '-partial');
+            const response = await cache.match(modelKey);
+            if (response && response.headers.get('X-Partial') === 'true') {
+                const bytesReceived = parseInt(response.headers.get('X-Bytes-Received') || '0');
+                const buffer = await response.arrayBuffer();
+                return { buffer: new Uint8Array(buffer), bytesReceived };
+            }
+        } catch {}
+        return null;
+    }
+    
+    async function clearPartialDownload(modelKey) {
+        try {
+            const cache = await caches.open(CACHE_NAME + '-partial');
+            await cache.delete(modelKey);
+        } catch {}
+    }
+
+    // ── Model Loading with Resume Support ────────────────────────────────────
 
     async function loadONNXSession(modelKey, modelUrl, onProgress) {
-        // Check cache first
+        // Check cache first (complete download)
         let arrayBuffer = await getCachedModel(modelKey);
         
         if (!arrayBuffer) {
-            // Download with timeout and progress
+            // Check for partial download to resume
+            const partial = await getPartialDownload(modelKey);
+            let startByte = 0;
+            let existingChunks = [];
+            
+            if (partial && partial.bytesReceived > 0) {
+                // We have a partial download - try to resume
+                startByte = partial.bytesReceived;
+                existingChunks = [partial.buffer];
+            }
             
             try {
-                // Add timeout to prevent hanging on slow networks
+                // Set up fetch with Range header for resume
+                const headers = {};
+                if (startByte > 0) {
+                    headers['Range'] = `bytes=${startByte}-`;
+                }
+                
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     controller.abort();
-                }, 120000); // 120 second timeout
+                }, 180000); // 3 minute initial timeout
                 
-                const response = await fetch(modelUrl, { signal: controller.signal });
+                const response = await fetch(modelUrl, { 
+                    signal: controller.signal,
+                    headers: headers
+                });
                 clearTimeout(timeoutId);
                 
-                if (!response.ok) {
+                // Check if server supports range requests
+                const isPartialResponse = response.status === 206;
+                const contentLength = +response.headers.get('Content-Length') || 0;
+                const totalLength = isPartialResponse ? startByte + contentLength : contentLength;
+                
+                if (!response.ok && response.status !== 206) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 
-                const reader = response.body.getReader();
-                const contentLength = +response.headers.get('Content-Length') || 0;
+                // If server doesn't support range, start fresh
+                if (startByte > 0 && !isPartialResponse) {
+                    startByte = 0;
+                    existingChunks = [];
+                }
                 
-                let received = 0;
-                const chunks = [];
+                const reader = response.body.getReader();
+                let received = startByte;
+                const chunks = [...existingChunks];
                 const startTime = Date.now();
+                let lastSaveTime = Date.now();
                 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -184,16 +304,27 @@ const ClientProcessor = (() => {
                     chunks.push(value);
                     received += value.length;
                     
-                    if (onProgress && contentLength) {
-                        onProgress(received / contentLength);
+                    if (onProgress && totalLength) {
+                        onProgress(received / totalLength);
                     }
                     
-                    // Check if download is taking too long (>300 seconds total)
-                    if (Date.now() - startTime > 300000) {
-                        throw new Error('Download taking too long, using server instead');
+                    // Save partial progress every 5 seconds for resume on tab close
+                    if (Date.now() - lastSaveTime > 5000) {
+                        await cachePartialDownload(modelKey, chunks, received);
+                        saveDownloadProgress(modelKey, received, totalLength);
+                        lastSaveTime = Date.now();
+                    }
+                    
+                    // Check if download is taking too long (>10 minutes total)
+                    if (Date.now() - startTime > 600000) {
+                        // Save progress before giving up
+                        await cachePartialDownload(modelKey, chunks, received);
+                        saveDownloadProgress(modelKey, received, totalLength);
+                        throw new Error('Download taking too long, will resume later');
                     }
                 }
                 
+                // Combine all chunks
                 arrayBuffer = new Uint8Array(received);
                 let pos = 0;
                 for (const chunk of chunks) {
@@ -202,12 +333,16 @@ const ClientProcessor = (() => {
                 }
                 arrayBuffer = arrayBuffer.buffer;
                 
-                // Cache for next time
+                // Cache complete download
                 await cacheModel(modelKey, arrayBuffer);
                 
+                // Clear partial download data
+                await clearPartialDownload(modelKey);
+                clearDownloadProgress(modelKey);
+                
             } catch (error) {
-                // Download failed
-                throw error; // Re-throw to trigger server fallback
+                // Download failed - progress already saved for resume
+                throw error;
             }
         }
         
@@ -345,30 +480,67 @@ const ClientProcessor = (() => {
         return outCanvas.toDataURL('image/png');
     }
 
+    // ── Compatibility helpers for HTML init code ──────────────────────────
+
+    function isMobile() {
+        return /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    }
+
     // ── Public API ────────────────────────────────────────────────────────
 
     return {
+        // State getters
         get isRVMReady() { return _rvmReady; },
         get isRMBGReady() { return _rmbgReady; },
         get isRVMDownloading() { return _rvmDownloading; },
         get isRMBGDownloading() { return _rmbgDownloading; },
+        get deviceInfo() { return _deviceInfo; },
 
-        async init() {
-            await initFaceDetector();
-            
-            // Check what's already cached
+        // Compatibility method for HTML init code
+        async detectDevice() {
+            if (isMobile()) {
+                _deviceInfo = { capable: false, isMobile: true, gpu: 'Mobile' };
+                return false;
+            }
+            _deviceInfo = { capable: true, isMobile: false, gpu: 'WASM', gpuShort: 'CPU', dtype: 'fp32' };
+            return true;
+        },
+
+        // Compatibility method for HTML init code
+        async isModelCached() {
             const rvmCached = await isModelCached(MODELS.rvm.id);
             const rmbgCached = await isModelCached(MODELS.rmbg.id);
+            return rvmCached || rmbgCached;
+        },
+
+        // Compatibility method for HTML init code (maps to loadRVM)
+        async initModel(onProgress, quality) {
+            await this.loadRVM(onProgress);
+            return _rvmReady;
+        },
+
+        async init() {
+            if (_initPromise) return _initPromise;
             
-            // Load RVM if cached (always needed for fast mode)
-            if (rvmCached && !_rvmReady) {
-                this.loadRVM();
-            }
-            // Load RMBG only if cached (don't download until needed)
-            if (rmbgCached && !_rmbgReady) {
-                this.loadRMBG();
-            }
-            // Note: RMBG will auto-download when first object is detected
+            _initPromise = (async () => {
+                await initFaceDetector();
+                
+                // Check what's already cached and load them
+                const rvmCached = await isModelCached(MODELS.rvm.id);
+                const rmbgCached = await isModelCached(MODELS.rmbg.id);
+                
+                // Load cached models (fast, from cache)
+                const promises = [];
+                if (rvmCached && !_rvmReady && !_rvmDownloading) {
+                    promises.push(this.loadRVM());
+                }
+                if (rmbgCached && !_rmbgReady && !_rmbgDownloading) {
+                    promises.push(this.loadRMBG());
+                }
+                await Promise.all(promises);
+            })();
+            
+            return _initPromise;
         },
 
         async loadRVM(onProgress) {
@@ -405,30 +577,55 @@ const ClientProcessor = (() => {
 
         async processImage(imageElement, mode = 'fast') {
             /**
-             * Smart processing:
-             * 1. Detect person vs object
-             * 2. Route to RVM (person) or RMBG (object)
-             * 3. If model not ready, return null (caller uses server)
+             * CRITICAL ROUTING LOGIC:
+             * 1. Detect if image contains a person
+             * 2. Route to correct model:
+             *    - Person + RVM ready → RVM locally
+             *    - Person + RVM not ready → SERVER (never use RMBG for persons)
+             *    - Object + RMBG ready → RMBG locally
+             *    - Object + RMBG not ready → SERVER + start RMBG download
              */
+            
+            // First, detect person vs object
             const isPerson = await detectPerson(imageElement);
             const downsample = mode === 'fast' ? 0.2 : 0.5;
             
             if (isPerson) {
-                if (!_rvmReady) {
+                // === PERSON DETECTED ===
+                // Only use RVM if it's ready, otherwise SERVER
+                // NEVER fall back to RMBG for persons
+                if (_rvmReady && _rvmSession) {
+                    try {
+                        const result = await runRVM(imageElement, downsample);
+                        return { success: true, dataUrl: result, model: 'rvm', isPerson: true };
+                    } catch (e) {
+                        return { success: false, needsModel: 'rvm', isPerson: true, error: e.message };
+                    }
+                } else {
+                    // RVM not ready - use server, start downloading RVM
+                    if (!_rvmDownloading && !_rvmReady) {
+                        this.loadRVM();
+                    }
                     return { success: false, needsModel: 'rvm', isPerson: true };
                 }
-                const result = await runRVM(imageElement, downsample);
-                return { success: true, dataUrl: result, model: 'rvm', isPerson: true };
             } else {
-                if (!_rmbgReady) {
-                    // Start downloading RMBG for next time
-                    if (!_rmbgDownloading) {
+                // === OBJECT DETECTED ===
+                // Only use RMBG if it's ready, otherwise SERVER
+                // NEVER fall back to RVM for objects
+                if (_rmbgReady && _rmbgSession) {
+                    try {
+                        const result = await runRMBG(imageElement);
+                        return { success: true, dataUrl: result, model: 'rmbg', isPerson: false };
+                    } catch (e) {
+                        return { success: false, needsModel: 'rmbg', isPerson: false, error: e.message };
+                    }
+                } else {
+                    // RMBG not ready - use server, start downloading RMBG
+                    if (!_rmbgDownloading && !_rmbgReady) {
                         this.loadRMBG();
                     }
                     return { success: false, needsModel: 'rmbg', isPerson: false };
                 }
-                const result = await runRMBG(imageElement);
-                return { success: true, dataUrl: result, model: 'rmbg', isPerson: false };
             }
         },
 
