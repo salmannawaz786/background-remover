@@ -2,21 +2,23 @@
 // Handles offline caching of app shell and static assets
 // AI model caching is handled by transformers.js Cache API separately
 
-const CACHE_NAME = 'bg-remover-v1';
+const CACHE_NAME = 'bg-remover-v1.0.1';
 const APP_SHELL = [
     '/',
-    '/static/index.css',
-    '/static/navbar.css',
-    '/static/footer.css',
-    '/static/theme.css',
-    '/static/theme-toggle.css',
-    '/static/quality-toggle.css',
-    '/static/auth.css',
-    '/static/pwa-install.css',
-    '/static/scripts.js',
-    '/static/client-processor.js',
-    '/static/firebaseauth.js',
-    '/static/pwa-install.js',
+    '/static/index.css?v=1.0.1',
+    '/static/navbar.css?v=1.0.1',
+    '/static/footer.css?v=1.0.1',
+    '/static/theme.css?v=1.0.1',
+    '/static/theme-toggle.css?v=1.0.1',
+    '/static/quality-toggle.css?v=1.0.1',
+    '/static/auth.css?v=1.0.1',
+    '/static/pwa-install.css?v=1.0.1',
+    '/static/scripts.js?v=1.0.1',
+    '/static/client-processor.js?v=1.0.1',
+    '/static/client-processor-v2.js?v=1.0.1',
+    '/static/firebaseauth.js?v=1.0.1',
+    '/static/pwa-install.js?v=1.0.1',
+    '/static/app.js?v=1.0.1',
     '/static/dogie_running.lottie',
     '/static/images/logo.png'
 ];

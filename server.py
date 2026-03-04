@@ -19,6 +19,7 @@ import threading
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
+from brevo_email import send_verification_email, verify_otp
 import boto3
 from botocore.exceptions import ClientError
 from model_manager_v4 import get_model_manager
@@ -627,6 +628,49 @@ def cleanup_old_files():
         logger.error(f"Cleanup error: {str(e)}")
     finally:
         Timer(1800, cleanup_old_files).start()  # Every 30 min
+
+@app.route('/api/send-otp', methods=['POST'])
+def send_otp():
+    """Send OTP to user's email"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        success, message = send_verification_email(email)
+        
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        else:
+            return jsonify({'error': message}), 500
+            
+    except Exception as e:
+        logger.error(f"Send OTP error: {str(e)}")
+        return jsonify({'error': 'Failed to send verification code'}), 500
+
+@app.route('/api/verify-otp', methods=['POST'])
+def verify_otp_route():
+    """Verify OTP"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        otp = data.get('otp')
+        
+        if not email or not otp:
+            return jsonify({'error': 'Email and OTP are required'}), 400
+        
+        success, message = verify_otp(email, otp)
+        
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        else:
+            return jsonify({'error': message}), 400
+            
+    except Exception as e:
+        logger.error(f"Verify OTP error: {str(e)}")
+        return jsonify({'error': 'Failed to verify OTP'}), 500
 
 if __name__ == '__main__':
     # Start cleanup
