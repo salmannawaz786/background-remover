@@ -82,12 +82,12 @@ def detect_person(image: Image.Image) -> bool:
         new_h = int(h * scale)
         gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     
-    # Detect faces with optimized parameters for speed
+    # Detect faces with improved accuracy
     faces = cascade.detectMultiScale(
         gray,
-        scaleFactor=1.2,  # Larger steps = faster
-        minNeighbors=3,   # Lower = faster but less accurate
-        minSize=(20, 20), # Smaller min = catch more faces
+        scaleFactor=1.1,  # Smaller steps = more accurate
+        minNeighbors=5,   # Higher = more accurate, less false positives
+        minSize=(30, 30), # Larger min = better person detection
         flags=cv2.CASCADE_SCALE_IMAGE
     )
     
@@ -251,32 +251,38 @@ class BackgroundRemoverV4:
         rmbg_size = os.path.getsize(RMBG_CONFIG['file']) / (1024*1024) if os.path.exists(RMBG_CONFIG['file']) else RMBG_CONFIG['size_mb']
         return {
             'fast': {'name': 'Smart Fast', 'size_mb': rvm_size, 'description': 'RVM 0.2 (persons) / RMBG (objects)'},
-            'pro':  {'name': 'Smart Pro',  'size_mb': rmbg_size, 'description': 'RVM 0.5 (persons) / RMBG (objects)'},
+            'pro':  {'name': 'Smart Pro',  'size_mb': rmbg_size, 'description': 'RMBG-1.4 (all images)'},
         }
     
     def remove_background(self, image: Image.Image, mode: str = 'fast') -> Image.Image:
         """
         Remove background with automatic model selection.
         
-        1. Detect if image contains a person (face detection, <100ms)
-        2. Route to appropriate model:
-           - Person → RVM (0.2 for fast, 0.5 for pro)
-           - Object → RMBG-1.4
+        Fast mode:
+           - Person → RVM 0.2 (fast, lightweight)
+           - Object → RMBG-1.4 (accurate)
+        
+        Pro mode:
+           - All images → RMBG-1.4 (highest quality)
         """
         t0 = time.time()
         
-        # Detect person vs object
-        is_person = detect_person(image)
-        
-        if is_person:
-            # Use RVM for persons
-            downsample = 0.2 if mode == 'fast' else 0.5
-            result = run_rvm(image, downsample_ratio=downsample)
-            model_used = f"RVM ({downsample})"
-        else:
-            # Use RMBG for objects
+        # Pro mode: Always use RMBG-1.4 for best quality
+        if mode == 'pro':
             result = run_rmbg(image)
             model_used = "RMBG-1.4"
+        else:
+            # Fast mode: Detect person vs object
+            is_person = detect_person(image)
+            
+            if is_person:
+                # Use RVM for persons (fast)
+                result = run_rvm(image, downsample_ratio=0.2)
+                model_used = "RVM (0.2)"
+            else:
+                # Use RMBG for objects
+                result = run_rmbg(image)
+                model_used = "RMBG-1.4"
         
         logger.info(f"[{mode}] {model_used} -> total: {time.time()-t0:.2f}s")
         return result
