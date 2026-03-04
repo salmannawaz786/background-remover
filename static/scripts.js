@@ -43,7 +43,6 @@ const ThemeManager = {
     setupThemeToggle() {
         const toggleBtn = document.querySelector('.theme-toggle-btn');
         if (!toggleBtn) {
-            console.warn('Theme toggle button not found');
             return;
         }
 
@@ -153,7 +152,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Optional: Listen for theme change events
 document.addEventListener('themeChanged', (e) => {
-    console.log(`Theme changed to: ${e.detail.theme}`);
     // You can add additional actions here if needed
 });
 

@@ -46,11 +46,10 @@ const ClientProcessor = (() => {
             const cache = await caches.open(CACHE_NAME);
             const response = await cache.match(modelKey);
             if (response) {
-                console.log(`[Cache] Found ${modelKey}`);
                 return await response.arrayBuffer();
             }
         } catch (e) {
-            console.warn('[Cache] Read error:', e);
+            // Cache read error
         }
         return null;
     }
@@ -62,10 +61,9 @@ const ClientProcessor = (() => {
                 headers: { 'Content-Type': 'application/octet-stream' }
             });
             await cache.put(modelKey, response);
-            console.log(`[Cache] Stored ${modelKey} (${(arrayBuffer.byteLength/1e6).toFixed(1)}MB)`);
             return true;
         } catch (e) {
-            console.warn('[Cache] Write error:', e);
+            // Cache write error
             return false;
         }
     }
@@ -90,16 +88,14 @@ const ClientProcessor = (() => {
                 const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
                 _faceDetector = detector;
                 _faceDetectorSupported = true;
-                console.log('[FaceDetect] Using browser FaceDetector API');
                 return true;
             } catch (e) {
-                console.warn('[FaceDetect] Browser API not available:', e);
+                // Browser API not available
             }
         }
         
         // Fallback: simple heuristic (skin tone detection)
         _faceDetectorSupported = false;
-        console.log('[FaceDetect] Using skin-tone heuristic fallback');
         return false;
     }
 
@@ -110,10 +106,9 @@ const ClientProcessor = (() => {
             try {
                 const faces = await _faceDetector.detect(imageElement);
                 const isPerson = faces.length > 0;
-                console.log(`[FaceDetect] ${isPerson ? 'Person' : 'Object'} (${(performance.now()-t0).toFixed(0)}ms, ${faces.length} faces)`);
                 return isPerson;
             } catch (e) {
-                console.warn('[FaceDetect] Detection error:', e);
+                // Detection error
             }
         }
         
@@ -149,7 +144,6 @@ const ClientProcessor = (() => {
         
         const skinRatio = skinPixels / total;
         const isPerson = skinRatio > 0.05;  // >5% skin pixels = likely person
-        console.log(`[FaceDetect] Skin heuristic: ${(skinRatio*100).toFixed(1)}% → ${isPerson ? 'Person' : 'Object'}`);
         return isPerson;
     }
 
@@ -161,15 +155,13 @@ const ClientProcessor = (() => {
         
         if (!arrayBuffer) {
             // Download with timeout and progress
-            console.log(`[Model] Downloading ${modelKey}...`);
             
             try {
                 // Add timeout to prevent hanging on slow networks
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => {
                     controller.abort();
-                    console.warn(`[Model] Download timeout for ${modelKey} (60s)`);
-                }, 60000); // 60 second timeout
+                }, 120000); // 120 second timeout
                 
                 const response = await fetch(modelUrl, { signal: controller.signal });
                 clearTimeout(timeoutId);
@@ -196,8 +188,8 @@ const ClientProcessor = (() => {
                         onProgress(received / contentLength);
                     }
                     
-                    // Check if download is taking too long (>90 seconds total)
-                    if (Date.now() - startTime > 90000) {
+                    // Check if download is taking too long (>300 seconds total)
+                    if (Date.now() - startTime > 300000) {
                         throw new Error('Download taking too long, using server instead');
                     }
                 }
@@ -210,17 +202,11 @@ const ClientProcessor = (() => {
                 }
                 arrayBuffer = arrayBuffer.buffer;
                 
-                console.log(`[Model] Downloaded ${modelKey}: ${(received/1e6).toFixed(1)}MB`);
-                
                 // Cache for next time
                 await cacheModel(modelKey, arrayBuffer);
                 
             } catch (error) {
-                if (error.name === 'AbortError') {
-                    console.warn(`[Model] Download aborted for ${modelKey}`);
-                } else {
-                    console.error(`[Model] Download failed for ${modelKey}:`, error.message);
-                }
+                // Download failed
                 throw error; // Re-throw to trigger server fallback
             }
         }
@@ -236,10 +222,9 @@ const ClientProcessor = (() => {
                 graphOptimizationLevel: 'all'
             });
             
-            console.log(`[Model] ${modelKey} ready`);
             return session;
         } catch (error) {
-            console.error(`[Model] Session creation failed for ${modelKey}:`, error);
+            // Session creation failed
             throw error;
         }
     }
@@ -273,13 +258,11 @@ const ClientProcessor = (() => {
         const r = new ort.Tensor('float32', new Float32Array([0]), [1, 1, 1, 1]);
         const dsr = new ort.Tensor('float32', new Float32Array([downsampleRatio]), [1]);
         
-        const t0 = performance.now();
         const results = await _rvmSession.run({
             src: srcTensor,
             r1i: r, r2i: r, r3i: r, r4i: r,
             downsample_ratio: dsr
         });
-        console.log(`[RVM] Inference: ${(performance.now()-t0).toFixed(0)}ms`);
         
         // Get alpha from output
         const alpha = results.pha.data;
@@ -322,10 +305,8 @@ const ClientProcessor = (() => {
         
         const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
         
-        const t0 = performance.now();
         const inputName = _rmbgSession.inputNames[0];
         const results = await _rmbgSession.run({ [inputName]: inputTensor });
-        console.log(`[RMBG] Inference: ${(performance.now()-t0).toFixed(0)}ms`);
         
         // Get mask output
         const outputName = _rmbgSession.outputNames[0];
@@ -378,15 +359,16 @@ const ClientProcessor = (() => {
             // Check what's already cached
             const rvmCached = await isModelCached(MODELS.rvm.id);
             const rmbgCached = await isModelCached(MODELS.rmbg.id);
-            console.log(`[Init] Cached: RVM=${rvmCached}, RMBG=${rmbgCached}`);
             
-            // Load cached models immediately
+            // Load RVM if cached (always needed for fast mode)
             if (rvmCached && !_rvmReady) {
                 this.loadRVM();
             }
+            // Load RMBG only if cached (don't download until needed)
             if (rmbgCached && !_rmbgReady) {
                 this.loadRMBG();
             }
+            // Note: RMBG will auto-download when first object is detected
         },
 
         async loadRVM(onProgress) {
@@ -397,7 +379,7 @@ const ClientProcessor = (() => {
                 _rvmSession = await loadONNXSession(MODELS.rvm.id, MODELS.rvm.url, onProgress);
                 _rvmReady = true;
             } catch (e) {
-                console.error('[RVM] Load failed:', e);
+                // RVM load failed
             } finally {
                 _rvmDownloading = false;
             }
@@ -411,7 +393,7 @@ const ClientProcessor = (() => {
                 _rmbgSession = await loadONNXSession(MODELS.rmbg.id, MODELS.rmbg.url, onProgress);
                 _rmbgReady = true;
             } catch (e) {
-                console.error('[RMBG] Load failed:', e);
+                // RMBG load failed
             } finally {
                 _rmbgDownloading = false;
             }
@@ -433,14 +415,12 @@ const ClientProcessor = (() => {
             
             if (isPerson) {
                 if (!_rvmReady) {
-                    console.log('[Process] RVM not ready, use server');
                     return { success: false, needsModel: 'rvm', isPerson: true };
                 }
                 const result = await runRVM(imageElement, downsample);
                 return { success: true, dataUrl: result, model: 'rvm', isPerson: true };
             } else {
                 if (!_rmbgReady) {
-                    console.log('[Process] RMBG not ready, use server');
                     // Start downloading RMBG for next time
                     if (!_rmbgDownloading) {
                         this.loadRMBG();

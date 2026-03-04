@@ -61,7 +61,6 @@ async function verifyTokenWithBackend(token) {
         
         return await response.json();
     } catch (error) {
-        console.error('Token verification error:', error);
         throw error;
     }
 }
@@ -79,7 +78,6 @@ async function sendVerificationEmail(user) {
         await sendEmailVerification(user);
         displaySuccessMessage("Verification email sent! Please check your inbox and verify your email before logging in.");
     } catch (error) {
-        console.error("Error sending verification email:", error);
         displayErrorMessage("Failed to send verification email: " + error.message);
     }
 }
@@ -132,7 +130,7 @@ async function handleRegistrationSuccess(user, isNewUser = true) {
                         });
                     }
                 } catch (error) {
-                    console.error('Error updating referrer:', error);
+                    // Error updating referrer
                 }
             }
             
@@ -149,7 +147,6 @@ async function handleRegistrationSuccess(user, isNewUser = true) {
             }, 5000);
         }
     } catch (error) {
-        console.error('Registration error:', error);
         displayErrorMessage('Registration failed. Please try again.');
     }
 }
@@ -196,7 +193,6 @@ async function handleAuthSuccess(user) {
             window.location.href = '/';
         }, 1000);
     } catch (error) {
-        console.error('Authentication error:', error);
         displayErrorMessage('Authentication failed. Please try again.');
     }
 }
@@ -211,11 +207,6 @@ async function handleGoogleAuth(isSignUp = false) {
     try {
         const result = await signInWithPopup(auth, provider);
         const user = result.user;
-        console.log('Google user data:', {
-            photoURL: user.photoURL,
-            displayName: user.displayName,
-            email: user.email
-        });
         
         // Check if this is a new user
         const isNewUser = result._tokenResponse.isNewUser;
@@ -372,7 +363,6 @@ async function handleLogout() {
         });
         window.location.href = '/login';
     } catch (error) {
-        console.error('Logout error:', error);
         displayErrorMessage("Logout failed: " + error.message);
     }
 }
@@ -397,7 +387,7 @@ async function updateUserStats(userId) {
             }
         }
     } catch (error) {
-        console.error('Error fetching user stats:', error);
+        // Error fetching user stats
     }
 }
 
@@ -443,14 +433,9 @@ onAuthStateChanged(auth, async (user) => {
                     
                     profilePic.src = photoWithCacheBust;
                     profilePic.onerror = (e) => {
-                        console.error('Failed to load profile picture:', e);
                         profilePic.src = '../static/images/user.png';
                     };
-                    profilePic.onload = () => {
-                        console.log('Profile picture loaded successfully');
-                    };
                 } else {
-                    console.warn('No photoURL found, using fallback');
                     profilePic.src = '../static/images/user.png';
                 }
                 
@@ -483,7 +468,6 @@ onAuthStateChanged(auth, async (user) => {
             if (typeof updateProButtonState === 'function') updateProButtonState(true);
 
         } catch (error) {
-            console.error('Token verification error:', error);
             await handleLogout();
         }
     } else {

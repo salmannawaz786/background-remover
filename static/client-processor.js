@@ -40,7 +40,6 @@ const ClientProcessor = (() => {
             device.destroy();
             return true;
         } catch (e) {
-            console.warn('[ClientAI] GPU memory check failed:', e.message);
             return false;
         }
     }
@@ -90,7 +89,6 @@ const ClientProcessor = (() => {
                 // Mobile — always server
                 if (isMobile()) {
                     _deviceInfo = { gpu: 'Mobile', capable: false, isMobile: true };
-                    console.log('[ClientAI] Mobile → server mode');
                     return false;
                 }
 
@@ -145,7 +143,6 @@ const ClientProcessor = (() => {
                             isMobile: false
                         };
 
-                        console.log(`[ClientAI] ${gpuName} | WebGPU: ${_webgpuAvailable} | dtype: ${_modelDtype}`);
                     }
                 }
 
@@ -164,12 +161,10 @@ const ClientProcessor = (() => {
                         isMobile: false,
                         isWasm: true
                     };
-                    console.log('[ClientAI] No WebGPU → WASM fallback (quantized)');
                 }
 
                 return _isCapable;
             } catch (e) {
-                console.log('[ClientAI] Detection failed:', e);
                 return false;
             }
         },
@@ -181,7 +176,6 @@ const ClientProcessor = (() => {
                 const cache = await caches.open('transformers-cache');
                 const keys = await cache.keys();
                 const hasModel = keys.some(k => k.url.includes('RMBG-1.4') && k.url.includes('onnx'));
-                console.log(`[ClientAI] Model cached: ${hasModel} (${keys.length} entries)`);
                 return hasModel;
             } catch { return false; }
         },
@@ -207,8 +201,6 @@ const ClientProcessor = (() => {
                         }
                     };
 
-                    console.log(`[ClientAI] Loading ${entry.id} (${_device}, ${_modelDtype})...`);
-
                     // Load processor
                     entry.processor = await AutoProcessor.from_pretrained(entry.id, {
                         progress_callback: progressCallback
@@ -233,17 +225,14 @@ const ClientProcessor = (() => {
                     entry.ready = true;
                     entry.loading = false;
                     _activeModelKey = key;
-                    console.log(`[ClientAI] ${entry.id} ready on ${_device}!`);
                     onProgress?.(100, 'ready');
                     return true;
                 } catch (e) {
-                    console.error(`[ClientAI] Failed to load ${entry.id}:`, e);
                     entry.loading = false;
                     entry.promise = null;
 
                     // If WebGPU failed, try WASM fallback
                     if (_device === 'webgpu') {
-                        console.log('[ClientAI] WebGPU failed, trying WASM fallback...');
                         _device = 'wasm';
                         _wasmFallback = true;
                         _modelDtype = 'q8';
@@ -282,7 +271,6 @@ const ClientProcessor = (() => {
 
             try {
                 const startTime = performance.now();
-                console.log(`[ClientAI] Processing (${quality} mode, ${_device})...`);
 
                 // Load and preprocess
                 const image = await RawImage.fromURL(imageURL);
@@ -318,9 +306,6 @@ const ClientProcessor = (() => {
 
                 // Export as WebP
                 const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.95));
-
-                const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-                console.log(`[ClientAI] ✅ ${quality} done in ${elapsed}s on ${_device} (${(blob.size / 1024).toFixed(0)}KB)`);
 
                 // Free GPU tensors
                 try {
@@ -368,10 +353,8 @@ const ClientProcessor = (() => {
                 formData.append('image', blob, filename || 'processed.webp');
                 const response = await fetch('/api/upload-to-r2', { method: 'POST', body: formData });
                 const data = await response.json();
-                if (data.success) console.log('[ClientAI] R2 upload:', data.key);
                 return data;
             } catch (e) {
-                console.error('[ClientAI] R2 upload failed:', e);
                 return { success: false };
             }
         }

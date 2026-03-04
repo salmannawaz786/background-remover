@@ -30,7 +30,7 @@ const PWAInstaller = (() => {
             // Check for updates periodically
             setInterval(() => reg.update(), 60 * 60 * 1000); // every hour
         } catch (e) {
-            console.error('[PWA] SW registration failed:', e);
+            // SW registration failed
         }
     }
 
