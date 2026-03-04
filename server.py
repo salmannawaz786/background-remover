@@ -14,12 +14,14 @@ import psutil
 from threading import Timer
 import uuid
 import sys
+from queue import Queue
+import threading
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
 import boto3
 from botocore.exceptions import ClientError
-from birefnet_model import BiRefNetLite
+from model_manager_v4 import get_model_manager
 # Load environment variables
 
 # Load environment variables
@@ -31,7 +33,7 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-pro
 @app.route('/static/<path:filename>')
 def serve_static(filename):
     # Only allow specific file types
-    allowed_extensions = {'.css', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.js'}
+    allowed_extensions = {'.css', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.js', '.json', '.lottie', '.webp', '.woff', '.woff2'}
     file_ext = os.path.splitext(filename)[1].lower()
     
     if file_ext not in allowed_extensions:
@@ -97,8 +99,26 @@ if R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY:
 else:
     logger.warning("R2 credentials not provided. Image upload to R2 will be disabled.")
 
-# Enable CORS
-CORS(app, resources={r"/*": {"origins": "*"}}, methods=["GET", "POST"], allow_headers=["Content-Type"])
+# Enable CORS - restrict to our own domain in production
+ALLOWED_ORIGINS = [
+    'https://bgremover.sallulabs.com',
+    'http://localhost:5001',
+    'http://127.0.0.1:5001',
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, methods=["GET", "POST"], allow_headers=["Content-Type"])
+
+# Security headers middleware
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    # Only send HSTS on HTTPS
+    if request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
 
 # Configure upload folder and allowed extensions
 UPLOAD_FOLDER = 'uploads'
@@ -115,21 +135,37 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 MAX_MEMORY_PERCENT = 92
 memory_warning_issued = False
 
+# Request queue system - max 2 concurrent processing
+MAX_CONCURRENT_REQUESTS = 2
+request_queue = Queue(maxsize=10)  # Max 10 in queue
+active_requests = 0
+active_requests_lock = threading.Lock()
+
 # Thread pool - CPU-safe: executor handles compute, waitress handles I/O
 cpu_count = psutil.cpu_count(logical=False) or 2
 max_workers = max(1, cpu_count - 1)  # Leave 1 core for web I/O
 executor = ThreadPoolExecutor(max_workers=max_workers)
 logger.info(f"Initialized thread pool with {max_workers} workers (physical cores: {cpu_count})")
+logger.info(f"Request queue: max {MAX_CONCURRENT_REQUESTS} concurrent, {request_queue.maxsize} queue size")
 
-# Load BiRefNet-Lite model - FAST & HIGH QUALITY
+# Load model manager
 try:
-    birefnet_model = BiRefNetLite()
-    device_info = birefnet_model.get_device_info()
-    logger.info(f"Successfully loaded BiRefNet-Lite model")
-    logger.info(f"Device info: {device_info}")
+    logger.info("Initializing background remover (RVM + RMBG smart routing)...")
+    model_manager = get_model_manager()
+    available_models = model_manager.get_available_models()
+    logger.info(f"Available models: {list(available_models.keys())}")
+    for mode, info in available_models.items():
+        logger.info(f"  - {mode}: {info['name']} ({info.get('size_mb', 0):.1f}MB)")
+    # Pre-load RVM (persons) immediately - 15MB, fast load
+    model_manager.preload_rvm()
+    logger.info("RVM (persons) loading in background...")
+    # Pre-load RMBG (objects) in background
+    model_manager.preload_rmbg()
+    logger.info("RMBG (objects) loading in background...")
 except Exception as e:
-    logger.error(f"Failed to load BiRefNet-Lite model: {str(e)}")
-    birefnet_model = None
+    logger.error(f"Failed to initialize model manager: {str(e)}")
+    model_manager = None
+    raise
 
 # Authentication decorator
 def require_auth(f):
@@ -155,37 +191,41 @@ def require_auth(f):
     
     return decorated_function
 
-def process_image(image_path, hd_quality=False, output_format='webp'):
-    """Process image with BiRefNet-Lite - let model handle all resizing internally"""
+def process_image(image_path, model_mode='fast', output_format='webp'):
+    """Process image with selected model
+    
+    Args:
+        image_path: Path to input image
+        model_mode: 'fast' (U2Net Silueta) or 'hd' (RMBG-1.4)
+        output_format: 'webp' or 'png'
+    """
     start_time = time.time()
     
     try:
-        # Check memory - be more lenient, only block at critical levels
+        # Check memory
         mem_usage = check_memory_usage()
         if mem_usage > 95:
             gc.collect()
-            if birefnet_model:
-                birefnet_model.clear_cache()
+            if model_manager:
+                model_manager.clear_cache()
             mem_usage = check_memory_usage()
             if mem_usage > 95:
                 raise MemoryError("Server is busy. Please try again in a moment.")
         
-        if birefnet_model is None:
+        if model_manager is None:
             raise ValueError("Processing model not ready. Please refresh and try again.")
         
         with Image.open(image_path) as input_image:
-            # Convert to RGB if needed - model handles all resizing internally
+            # Convert to RGB if needed
             if input_image.mode != 'RGB':
                 input_image = input_image.convert('RGB')
             
-            logger.info(f"Processing {input_image.size} in {'HD' if hd_quality else 'Speed'} mode")
+            logger.info(f"Processing {input_image.size} with {model_mode} model")
             
-            # Process with BiRefNet-Lite (no pre-resize - model handles it)
-            output_image = birefnet_model.remove_background(
+            # Process with selected model
+            output_image = model_manager.remove_background(
                 input_image,
-                return_mask=False,
-                post_process=True,
-                hd_mode=hd_quality
+                mode=model_mode
             )
             
             # Save with chosen format
@@ -205,20 +245,20 @@ def process_image(image_path, hd_quality=False, output_format='webp'):
             gc.collect()
             
             processing_time = time.time() - start_time
-            logger.info(f"Processed in {processing_time:.2f}s ({output_format.upper()}, HD: {hd_quality})")
+            logger.info(f"Processed in {processing_time:.2f}s ({output_format.upper()}, model: {model_mode})")
             
             return img_io, processing_time, mimetype
             
     except MemoryError as e:
         gc.collect()
-        if birefnet_model:
-            birefnet_model.clear_cache()
+        if model_manager:
+            model_manager.clear_cache()
         raise
     except Exception as e:
         logger.error(f"Processing error: {str(e)}")
         gc.collect()
-        if birefnet_model:
-            birefnet_model.clear_cache()
+        if model_manager:
+            model_manager.clear_cache()
         raise
 
 def allowed_file(filename):
@@ -243,6 +283,23 @@ def check_memory_usage():
         return 0
 
 # Routes
+
+# PWA: Service Worker must be served from root scope
+@app.route('/sw.js')
+def serve_sw():
+    response = send_from_directory('static', 'sw.js')
+    response.headers['Content-Type'] = 'application/javascript'
+    response.headers['Service-Worker-Allowed'] = '/'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+# PWA: Manifest with correct MIME type
+@app.route('/manifest.json')
+def serve_manifest():
+    response = send_from_directory('static', 'manifest.json')
+    response.headers['Content-Type'] = 'application/manifest+json'
+    return response
+
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -355,8 +412,22 @@ def upload_image():
         user_id = session.get('user_id')
         is_authenticated = user_id is not None
         
-        # HD quality check (Speed/HD mode - available to all users)
-        hd_quality = request.form.get('hd_quality', 'false').lower() == 'true'
+        # Model mode: 'fast' (Silueta) or 'pro' (BiRefNet .pt)
+        model_mode = request.form.get('model', '').lower()
+        if model_mode not in ('fast', 'pro'):
+            # Backward compat: map old 'hd'/'best' to 'pro', others to 'fast'
+            if model_mode in ('hd', 'best'):
+                model_mode = 'pro'
+            else:
+                model_mode = 'fast'
+
+        # Pro mode requires authentication
+        if model_mode == 'pro' and not is_authenticated:
+            return jsonify({
+                'error': 'Pro mode requires an account. Sign in to access high-quality background removal!',
+                'requiresAuth': True,
+                'proRequired': True
+            }), 403
         
         # Output format (webp default, png optional)
         output_format = request.form.get('format', 'webp').lower()
@@ -402,9 +473,10 @@ def upload_image():
         file.save(filepath)
         
         try:
-            # Process image with quality setting
-            future = executor.submit(process_image, filepath, hd_quality, output_format)
-            img_io, processing_time, mimetype = future.result(timeout=60 if hd_quality else 30)
+            # Process image with selected model
+            timeout = 30 if model_mode == 'pro' else 12
+            future = executor.submit(process_image, filepath, model_mode, output_format)
+            img_io, processing_time, mimetype = future.result(timeout=timeout)
             
             # Copy image bytes for R2 upload (so we can send response immediately)
             img_io.seek(0)
@@ -466,20 +538,27 @@ def upload_image():
         gc.collect()
         return jsonify({'error': 'Upload failed. Please try again.'}), 500
 
+@app.route('/api/models')
+def get_models():
+    """Get available background removal models"""
+    if model_manager:
+        return jsonify({
+            'models': model_manager.get_available_models(),
+            'default': 'fast'
+        })
+    return jsonify({'error': 'Model manager not initialized'}), 500
+
 @app.route('/health')
 def health():
-    """Health check endpoint with BiRefNet-Lite info"""
+    """Health check endpoint with model info"""
     mem_usage = check_memory_usage()
     health_data = {
         'status': 'healthy' if mem_usage < MAX_MEMORY_PERCENT else 'degraded',
-        'model': 'BiRefNet-Lite',
-        'model_loaded': birefnet_model is not None,
+        'models': model_manager.get_available_models() if model_manager else {},
+        'model_loaded': model_manager is not None,
         'memory_usage': f"{mem_usage}%",
         'workers': executor._max_workers
     }
-    
-    if birefnet_model:
-        health_data['device_info'] = birefnet_model.get_device_info()
     
     return jsonify(health_data)
 
@@ -555,8 +634,8 @@ if __name__ == '__main__':
     cleanup_timer.daemon = True
     cleanup_timer.start()
     
-    logger.info("Starting Background Remover service with BiRefNet-Lite...")
-    logger.info(f"Model: BiRefNet-Lite, Workers: {max_workers}")
+    logger.info("Starting Background Remover service (multi-model)...")
+    logger.info(f"Models: {list(model_manager.get_available_models().keys())}, Workers: {max_workers}")
     
     from waitress import serve
-    serve(app, host="0.0.0.0", port=5000, threads=2)  # 2 I/O threads, executor handles compute
+    serve(app, host="0.0.0.0", port=5001, threads=2)  # 2 I/O threads, executor handles compute

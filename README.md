@@ -1,283 +1,144 @@
-# 🎨 Background Remover App
+# Background Remover
 
-AI-powered background removal with Firebase authentication and cloud storage.
+AI-powered background removal tool with smart model routing for persons and objects.
 
-## ✨ Features
+## Features
 
-- 🖼️ **High-Quality Background Removal** using AI (u2net model)
-- ⚡ **2-3x Faster Processing** with balanced optimization
-- 🔐 **Firebase Authentication** (Email/Password + Google OAuth)
-- ☁️ **Cloud Storage** (Optional Firebase Storage)
-- 🎨 **Theme Toggle** (Light/Dark mode)
-- 📱 **Responsive Design**
-- 🚀 **Single & Batch Processing**
+- **Smart Model Selection**: Automatically detects persons vs objects
+  - **RVM (Robust Video Matting)**: Fast, high-quality removal for people
+  - **RMBG-1.4**: Universal background removal for objects
+- **Dual Processing**: Client-side (browser) + Server-side fallback
+- **Authentication**: Firebase-based user management
+- **Cloud Storage**: Cloudflare R2 integration
+- **PWA Support**: Install as desktop/mobile app
 
----
+## Tech Stack
 
-## 🚀 Quick Start
+- **Backend**: Flask, Python 3.11+
+- **AI Models**: ONNX Runtime (RVM, RMBG-1.4)
+- **Face Detection**: OpenCV
+- **Frontend**: Vanilla JS, HTML5, CSS3
+- **Storage**: Cloudflare R2
+- **Auth**: Firebase Authentication
 
-### 1. Install Dependencies
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- Firebase project (for authentication)
+- Cloudflare R2 account (for image storage)
+
+### Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/Johny111ishxb/background-remover.git
+cd background-remover
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 2. Configure Environment
+# Setup environment variables
+cp .env.example .env
+# Edit .env with your credentials
 
-```bash
-# Copy example env file
-copy .env.example .env
+# Add Firebase credentials
+# Download firebase-credentials.json from Firebase Console
+# Place it in the project root
 
-# Edit .env with your settings
-```
-
-### 3. Run the Server
-
-```bash
+# Run server
 python server.py
 ```
 
-### 4. Open Your Browser
+Visit `http://localhost:5001`
 
-```
-http://localhost:5000
-```
+## Configuration
 
----
+### Environment Variables
 
-## 📋 Requirements
-
-- **Python** 3.8+
-- **pip** (Python package manager)
-- **Firebase Account** (for authentication)
-
----
-
-## ⚙️ Configuration
-
-### Environment Variables (.env)
+Create a `.env` file with:
 
 ```env
 SECRET_KEY=your-secret-key
-MAX_WORKERS=8
-MODEL_NAME=u2net
 FIREBASE_CREDENTIALS_PATH=firebase-credentials.json
-FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+R2_ENDPOINT=https://your-account.r2.cloudflarestorage.com
+R2_ACCESS_KEY=your-r2-access-key
+R2_SECRET_KEY=your-r2-secret-key
+R2_BUCKET_NAME=your-bucket-name
 ```
 
-### Performance Tuning
+### Firebase Setup
 
-| Setting | Speed | Quality | Use Case |
-|---------|-------|---------|----------|
-| `MODEL_NAME=u2net` | ⚡⚡ | ⭐⭐⭐⭐⭐ | **Recommended** - Best quality |
-| `MODEL_NAME=u2netp` | ⚡⚡⚡⚡⚡ | ⭐⭐⭐⭐ | Maximum speed, good quality |
+1. Create a Firebase project at [Firebase Console](https://console.firebase.google.com)
+2. Enable Authentication → Email/Password
+3. Download service account credentials
+4. Save as `firebase-credentials.json` in project root
 
----
+### Cloudflare R2 Setup
 
-## 🔥 Firebase Setup
+1. Create R2 bucket at [Cloudflare Dashboard](https://dash.cloudflare.com)
+2. Generate API tokens
+3. Add credentials to `.env`
 
-### 1. Create Firebase Project
+## Models
 
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create new project
-3. Enable Authentication (Email/Password + Google)
-4. Enable Firestore Database
-5. (Optional) Enable Storage
+Models are automatically downloaded on first run:
 
-### 2. Get Credentials
+- **RVM**: 15MB (persons)
+- **RMBG-1.4**: 44MB (objects)
 
-1. Go to Project Settings → Service Accounts
-2. Generate new private key
-3. Save as `firebase-credentials.json` in project root
+## API Endpoints
 
-### 3. Update firebaseauth.js
+### `POST /upload`
+Upload and process image
 
-Replace the config in `static/firebaseauth.js`:
+**Parameters:**
+- `image_file`: Image file (PNG, JPG, JPEG, GIF, WEBP)
+- `model`: `fast` or `pro` (default: `fast`)
 
-```javascript
-const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    // ... rest of config
-};
-```
-
----
-
-## 📁 Project Structure
-
-```
-background-remover-master/
-├── server.py              # Main Flask server
-├── templates/
-│   ├── index.html        # Main app
-│   ├── login.html        # Login page
-│   └── signup.html       # Signup page
-├── static/
-│   ├── app.js            # Main logic
-│   ├── scripts.js        # Theme & animations
-│   ├── firebaseauth.js   # Authentication
-│   └── *.css             # Styles
-├── .env                   # Configuration (create from .env.example)
-├── requirements.txt       # Python dependencies
-└── uploads/               # Temp files (auto-cleanup)
-```
-
----
-
-## 🔐 Authentication
-
-### Sign Up Flow
-
-1. User registers at `/signup`
-2. Firebase creates account
-3. Verification email sent
-4. User verifies email
-5. Logs in and gets access
-
-### Login Flow
-
-1. User logs in at `/login`
-2. Firebase authenticates
-3. Token sent to backend
-4. Backend verifies token
-5. Session created
-6. Access granted
-
----
-
-## 📊 API Endpoints
-
-### Public Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Main app |
-| `/login` | GET | Login page |
-| `/signup` | GET | Signup page |
-| `/health` | GET | Health check |
-| `/upload` | POST | Process image |
-
-### Auth Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/verify-token` | POST | Verify Firebase token |
-| `/logout` | GET | Clear session |
-
----
-
-## 🎨 Theme Toggle
-
-### How to Use
-
-Click the floating button in bottom-right corner to switch between light and dark themes.
-
-### Customization
-
-Edit `static/theme-toggle.css`:
-
-```css
-[data-theme="light"] {
-    --bg-color: #ffffff;
-    --text-color: #333333;
-}
-
-[data-theme="dark"] {
-    --bg-color: #1a1a1a;
-    --text-color: #ffffff;
+**Response:**
+```json
+{
+  "success": true,
+  "image_url": "https://..."
 }
 ```
 
----
+### `GET /health`
+Server health check
 
-## 🛠️ Troubleshooting
+## Performance
 
-### App Won't Start
+- **Face Detection**: <100ms
+- **RVM Processing**: 2-5s (persons)
+- **RMBG Processing**: 7-10s (objects)
+- **Concurrent Requests**: 2 simultaneous
 
-```bash
-# Check Python version
-python --version  # Should be 3.8+
+## Security
 
-# Reinstall dependencies
-pip install -r requirements.txt --upgrade
-```
+- ✅ CORS restricted to allowed origins
+- ✅ Security headers (CSP, HSTS, X-Frame-Options)
+- ✅ Rate limiting for non-authenticated users
+- ✅ Input validation and sanitization
+- ✅ Environment-based secrets
 
-### Firebase Errors
+## License
 
-- Verify `firebase-credentials.json` exists
-- Check Firebase config in `firebaseauth.js`
-- Ensure Firebase services are enabled
+MIT License - See LICENSE file for details
 
-### Slow Processing
+## Contributing
 
-- Try `MODEL_NAME=u2netp` in `.env`
-- Increase `MAX_WORKERS`
-- Check system resources
+Contributions welcome! Please open an issue or submit a pull request.
 
----
+## Support
 
-## 📈 Performance
-
-### Current Settings (Balanced)
-
-- **Processing Time**: 2-3 seconds per image
-- **Image Quality**: Excellent (95%)
-- **Max Resolution**: 1200px (auto-resize)
-
-### Optimization Tips
-
-1. **More CPU Cores**: Increase `MAX_WORKERS`
-2. **Faster Model**: Use `u2netp`
-3. **Smaller Images**: Users can resize before upload
-4. **SSD Storage**: Faster file I/O
-
----
-
-## 🚀 Deployment
-
-### Local Development
-
-```bash
-python server.py
-```
-
-### Production (Vercel)
-
-Already configured! Just:
-
-1. Push to GitHub
-2. Import to Vercel
-3. Add environment variables
-4. Deploy!
-
----
-
-## 📝 License
-
-MIT License - Feel free to use for personal or commercial projects!
-
----
-
-## 🤝 Support
-
-- **Docs**: Read `SETUP_GUIDE.md`
-- **Logs**: Check `app.log`
-- **Health**: Visit `/health` endpoint
-
----
-
-## 🎯 Features Roadmap
-
-- [ ] Image format selection (PNG/JPEG/WebP)
-- [ ] Custom background colors
-- [ ] Batch processing UI improvements
-- [ ] Image history/gallery
-- [ ] Advanced editing tools
+For issues and questions, please open a GitHub issue.
 
 ---
 
 **Made with ❤️ by SalluLabs**
-
-*For detailed setup instructions, see [SETUP_GUIDE.md](SETUP_GUIDE.md)*

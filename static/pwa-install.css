@@ -1,0 +1,499 @@
+/* PWA Install Banner */
+.pwa-install-banner,
+.pwa-ios-banner {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    color: #fff;
+    padding: 16px 20px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    z-index: 10000;
+    box-shadow: 0 -4px 20px rgba(251, 191, 36, 0.4);
+    animation: slideUp 0.4s ease-out;
+    flex-wrap: wrap;
+    border-top: 2px solid #fef3c7;
+}
+
+@keyframes slideUp {
+    from { transform: translateY(100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.pwa-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+    min-width: 200px;
+}
+
+.pwa-banner-icon {
+    font-size: 32px;
+    flex-shrink: 0;
+}
+
+.pwa-banner-text h4 {
+    margin: 0 0 4px 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.pwa-banner-text p {
+    margin: 0;
+    font-size: 13px;
+    opacity: 0.85;
+    line-height: 1.4;
+}
+
+.pwa-banner-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.pwa-install-btn {
+    background: linear-gradient(135deg, #facc15, #f59e0b);
+    color: #1a1a2e;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    white-space: nowrap;
+}
+
+.pwa-install-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 15px rgba(250, 204, 21, 0.4);
+}
+
+.pwa-dismiss-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.pwa-dismiss-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* iOS-specific banner */
+.pwa-ios-steps {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 13px;
+    opacity: 0.9;
+}
+
+.pwa-ios-steps span {
+    background: rgba(255, 255, 255, 0.15);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+/* Model download progress banner */
+.pwa-model-banner {
+    display: none;
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 12px;
+    z-index: 9999;
+    box-shadow: 0 4px 20px rgba(251, 191, 36, 0.4);
+    max-width: 420px;
+    width: 90%;
+    animation: slideDown 0.4s ease-out;
+    border: 1px solid #fef3c7;
+}
+
+@keyframes slideDown {
+    from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+    to { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+
+.pwa-model-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.pwa-model-banner-content .icon {
+    font-size: 20px;
+}
+
+.pwa-model-banner-content .text {
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.pwa-model-banner-content .text strong {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 2px;
+}
+
+.pwa-model-progress {
+    width: 100%;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.pwa-model-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #facc15, #f59e0b);
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+/* Hide install banner on phone screens — phones use server, no PWA install needed */
+@media (max-width: 768px) {
+    .pwa-install-banner,
+    .pwa-ios-banner {
+        display: none !important;
+    }
+
+    .pwa-model-banner {
+        top: auto;
+        bottom: 10px;
+        border-radius: 10px;
+        max-width: 95%;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIGN-IN PROMPT MODAL — shown after first BG removal for non-auth users
+   ═══════════════════════════════════════════════════════════════════════════ */
+.signin-prompt-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 99998;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+}
+
+.signin-prompt-modal.active {
+    display: flex;
+}
+
+.signin-prompt-content {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+}
+
+.signin-prompt-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #94a3b8;
+    padding: 4px 8px;
+}
+
+.signin-prompt-close:hover {
+    color: #64748b;
+}
+
+.signin-prompt-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+}
+
+.signin-prompt-content h3 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.signin-prompt-content p {
+    margin: 0 0 24px;
+    color: #64748b;
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.signin-prompt-actions {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.signin-prompt-btn {
+    flex: 1;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.signin-prompt-btn.primary {
+    background: linear-gradient(135deg, #facc15 0%, #f59e0b 100%);
+    color: #1e293b;
+}
+
+.signin-prompt-btn.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(250, 204, 21, 0.4);
+}
+
+.signin-prompt-btn.secondary {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.signin-prompt-btn.secondary:hover {
+    background: #e2e8f0;
+}
+
+.signin-prompt-skip {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 8px;
+}
+
+.signin-prompt-skip:hover {
+    color: #64748b;
+    text-decoration: underline;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESKTOP INSTALL SECTION — dedicated section (not floating banner)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.desktop-install-section {
+    display: none; /* Hidden by default, shown via JS for desktop */
+    padding: 24px 20px;
+    margin: 40px auto;
+    max-width: 700px;
+}
+
+.desktop-install-section.visible {
+    display: block;
+}
+
+.desktop-install-container {
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    border-radius: 16px;
+    padding: 28px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    box-shadow: 0 8px 30px rgba(251, 191, 36, 0.3);
+    border: 1px solid #fef3c7;
+}
+
+.desktop-install-content {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.desktop-install-icon {
+    color: #facc15;
+    flex-shrink: 0;
+}
+
+.desktop-install-text h3 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.desktop-install-text p {
+    margin: 0;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.75);
+    line-height: 1.5;
+}
+
+.desktop-install-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, #facc15 0%, #f59e0b 100%);
+    color: #1e293b;
+    border: none;
+    padding: 14px 24px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.desktop-install-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(250, 204, 21, 0.4);
+}
+
+.desktop-install-btn.coming-soon-btn {
+    background: rgba(250, 204, 21, 0.25);
+    color: #facc15;
+    border: 1px solid rgba(250, 204, 21, 0.5);
+    cursor: not-allowed;
+    opacity: 0.9;
+}
+
+.desktop-install-btn.coming-soon-btn:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+@media (max-width: 768px) {
+    .desktop-install-section {
+        display: none !important; /* Never show on mobile */
+    }
+}
+
+@media (max-width: 640px) {
+    .desktop-install-container {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .desktop-install-content {
+        flex-direction: column;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PWA SPLASH SCREEN — full screen overlay while loading model (PWA only)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pwa-splash {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0f0f23 100%);
+    z-index: 99999;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+}
+
+.pwa-splash.active {
+    display: flex;
+}
+
+.pwa-splash-inner {
+    text-align: center;
+    color: #fff;
+    max-width: 400px;
+    padding: 24px;
+}
+
+.pwa-splash-inner h2 {
+    margin: 20px 0 12px;
+    font-size: 24px;
+    font-weight: 700;
+    color: #facc15;
+}
+
+.pwa-splash-inner p {
+    margin: 0 0 28px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    line-height: 1.6;
+    min-height: 42px;
+}
+
+.pwa-splash-progress {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.pwa-splash-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #facc15, #f59e0b, #facc15);
+    background-size: 200% 100%;
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.4s ease;
+    animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+.pwa-splash-percent {
+    font-size: 18px;
+    font-weight: 700;
+    color: #facc15;
+    letter-spacing: 1px;
+}
+
+/* Dark mode adjustments */
+body.dark-mode .signin-prompt-content {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+}
+
+body.dark-mode .signin-prompt-content h3 {
+    color: #f1f5f9;
+}
+
+body.dark-mode .signin-prompt-content p {
+    color: #94a3b8;
+}
+
+body.dark-mode .signin-prompt-btn.secondary {
+    background: #334155;
+    color: #e2e8f0;
+}
+
+body.dark-mode .signin-prompt-btn.secondary:hover {
+    background: #475569;
+}

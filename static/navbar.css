@@ -181,6 +181,48 @@
   background: rgba(251, 191, 36, 0.15);
 }
 
+/* Install button in navbar */
+.install-btn {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: white;
+  border: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.3);
+}
+
+.install-btn:hover {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(251, 191, 36, 0.4);
+}
+
+.install-btn:active {
+  transform: translateY(0);
+}
+
+.install-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Dark mode install button */
+.dark-mode .install-btn {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.2);
+}
+
+.dark-mode .install-btn:hover {
+  box-shadow: 0 4px 12px rgba(251, 191, 36, 0.3);
+}
+
 /* DROPDOWN */
 .tools-dropdown {
   position: absolute;

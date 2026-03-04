@@ -57,3 +57,14 @@ static/backup/
 
 # Node modules (if using npm)
 node_modules/
+
+# Documentation files (keep only README.md)
+DEPLOYMENT_GUIDE.md
+GITHUB_SETUP.md
+IMPLEMENTATION_SUMMARY.md
+READY_TO_DEPLOY.md
+OPTIMIZATION_SUMMARY.md
+models.py
+
+# Untitled files
+Untitled-*.txt

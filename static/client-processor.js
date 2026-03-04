@@ -1,77 +1,172 @@
-// Client-side AI background removal using WebGPU
-// Activates only for: Apple Silicon (M1-M5) and NVIDIA GPUs
-// Falls back to server processing for all other devices
+// Client-side AI background removal using WebGPU + WASM fallback
+// Multi-model: RMBG-1.4 (HD) + BiRefNet-lite (Best) via Transformers.js
+// Smart routing: WebGPU → WASM → Server fallback
+// Supports: Apple Silicon (M1-M4), NVIDIA, AMD, Intel Arc
 
 const ClientProcessor = (() => {
-    // State
+    // ── State ──
     let _isCapable = false;
-    let _isModelReady = false;
-    let _isDownloading = false;
-    let _downloadProgress = 0;
-    let _model = null;
-    let _processor = null;
+    let _webgpuAvailable = false;
+    let _wasmFallback = false;
     let _deviceInfo = null;
     let _transformers = null;
-    let _initPromise = null;
+    let _modelDtype = 'fp32';
+    let _device = 'wasm'; // 'webgpu' or 'wasm'
 
-    const MODEL_ID = 'briaai/RMBG-2.0';
+    // Model registry: keyed by quality mode
+    const _models = {
+        hd:   { id: 'briaai/RMBG-1.4',      model: null, processor: null, ready: false, loading: false, promise: null, needsSigmoid: false },
+        best: { id: 'briaai/RMBG-1.4',      model: null, processor: null, ready: false, loading: false, promise: null, needsSigmoid: false },
+    };
+
+    let _downloadProgress = 0;
+    let _activeModelKey = null; // which model is currently loaded
+
     const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 
-    // Load transformers.js library lazily
+    function isMobile() {
+        return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+    }
+
+    // Check GPU memory (avoid crashing low-VRAM devices)
+    async function checkGPUMemory() {
+        try {
+            if (!navigator.gpu) return false;
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) return false;
+            const device = await adapter.requestDevice({
+                requiredLimits: { maxBufferSize: 256 * 1024 * 1024 }
+            });
+            device.destroy();
+            return true;
+        } catch (e) {
+            console.warn('[ClientAI] GPU memory check failed:', e.message);
+            return false;
+        }
+    }
+
+    // Lazy-load Transformers.js
     async function loadLibrary() {
         if (_transformers) return _transformers;
         _transformers = await import(TRANSFORMERS_CDN);
         return _transformers;
     }
 
-    return {
-        get isCapable() { return _isCapable; },
-        get isModelReady() { return _isModelReady; },
-        get isDownloading() { return _isDownloading; },
-        get downloadProgress() { return _downloadProgress; },
-        get deviceInfo() { return _deviceInfo; },
+    // ── Post-process mask from model output ──
+    async function buildMask(output, origWidth, origHeight, needsSigmoid) {
+        const { RawImage } = await loadLibrary();
 
-        // Fast device detection — checks WebGPU + GPU vendor (< 100ms)
+        let maskData = output[0];
+
+        // Apply sigmoid if model outputs logits (BiRefNet)
+        if (needsSigmoid) {
+            // sigmoid in-place on the tensor
+            maskData = maskData.sigmoid();
+        }
+
+        const maskTensor = maskData.mul(255).clamp(0, 255).to('uint8');
+        const w = maskTensor.dims[maskTensor.dims.length - 1];
+        const h = maskTensor.dims[maskTensor.dims.length - 2];
+        const maskImage = new RawImage(maskTensor.data, w, h, 1);
+        const resizedMask = await maskImage.resize(origWidth, origHeight);
+
+        // Cleanup tensors
+        try { maskTensor.dispose?.(); } catch {}
+
+        return resizedMask;
+    }
+
+    return {
+        get isCapable()       { return _isCapable; },
+        get isModelReady()    { return _models.hd.ready || _models.best.ready; },
+        get isDownloading()   { return _models.hd.loading || _models.best.loading; },
+        get downloadProgress(){ return _downloadProgress; },
+        get deviceInfo()      { return _deviceInfo; },
+        get device()          { return _device; },
+
+        // ── Device detection: WebGPU + GPU vendor (~50ms) ──
         async detectDevice() {
             try {
-                if (!navigator.gpu) {
-                    console.log('[ClientAI] No WebGPU support');
+                // Mobile — always server
+                if (isMobile()) {
+                    _deviceInfo = { gpu: 'Mobile', capable: false, isMobile: true };
+                    console.log('[ClientAI] Mobile → server mode');
                     return false;
                 }
 
-                const adapter = await Promise.race([
-                    navigator.gpu.requestAdapter(),
-                    new Promise((_, reject) => setTimeout(() => reject('timeout'), 2000))
-                ]);
+                // Check WebGPU
+                if (navigator.gpu) {
+                    const adapter = await Promise.race([
+                        navigator.gpu.requestAdapter(),
+                        new Promise((_, rej) => setTimeout(() => rej('timeout'), 2000))
+                    ]);
 
-                if (!adapter) {
-                    console.log('[ClientAI] No WebGPU adapter');
-                    return false;
+                    if (adapter) {
+                        let info = {};
+                        try { info = await adapter.requestAdapterInfo(); } catch {}
+
+                        const vendor = (info.vendor || '').toLowerCase();
+                        const arch   = (info.architecture || '').toLowerCase();
+                        const desc   = (info.description || '').toLowerCase();
+
+                        const isAppleSilicon = vendor.includes('apple') || arch.includes('apple');
+                        const isNvidia = vendor.includes('nvidia') || desc.includes('nvidia') || desc.includes('geforce');
+                        const isAMD    = vendor.includes('amd') || desc.includes('radeon') || desc.includes('amd');
+                        const isIntel  = vendor.includes('intel') || desc.includes('intel');
+
+                        // fp16 for Apple Silicon & NVIDIA (best perf), fp32 for AMD/Intel
+                        const supportsFp16 = isAppleSilicon || isNvidia;
+                        _modelDtype = supportsFp16 ? 'fp16' : 'fp32';
+
+                        // WebGPU capable = any recognized GPU
+                        const gpuCapable = isAppleSilicon || isNvidia || isAMD || isIntel;
+
+                        if (gpuCapable) {
+                            const memOk = await checkGPUMemory();
+                            if (memOk) {
+                                _webgpuAvailable = true;
+                                _device = 'webgpu';
+                                _isCapable = true;
+                            }
+                        }
+
+                        const gpuName = isAppleSilicon ? 'Apple Silicon' :
+                                        isNvidia ? 'NVIDIA GPU' :
+                                        isAMD ? 'AMD GPU' :
+                                        isIntel ? 'Intel GPU' : 'Unknown GPU';
+
+                        _deviceInfo = {
+                            isAppleSilicon, isNvidia, isAMD, isIntel,
+                            gpu: info.description || info.vendor || gpuName,
+                            gpuShort: gpuName,
+                            capable: _isCapable,
+                            dtype: _modelDtype,
+                            device: _device,
+                            isMobile: false
+                        };
+
+                        console.log(`[ClientAI] ${gpuName} | WebGPU: ${_webgpuAvailable} | dtype: ${_modelDtype}`);
+                    }
                 }
 
-                let info;
-                try {
-                    info = await adapter.requestAdapterInfo();
-                } catch {
-                    info = {};
+                // WASM fallback for non-WebGPU desktops
+                if (!_webgpuAvailable) {
+                    _wasmFallback = true;
+                    _device = 'wasm';
+                    _isCapable = true; // WASM works everywhere
+                    _modelDtype = 'q8'; // Use quantized for WASM speed
+                    _deviceInfo = {
+                        gpu: 'CPU (WASM)',
+                        gpuShort: 'CPU',
+                        capable: true,
+                        dtype: 'q8',
+                        device: 'wasm',
+                        isMobile: false,
+                        isWasm: true
+                    };
+                    console.log('[ClientAI] No WebGPU → WASM fallback (quantized)');
                 }
 
-                const vendor = (info.vendor || '').toLowerCase();
-                const arch = (info.architecture || '').toLowerCase();
-                const desc = (info.description || '').toLowerCase();
-
-                const isAppleSilicon = vendor.includes('apple') || arch.includes('apple');
-                const isNvidia = vendor.includes('nvidia') || desc.includes('nvidia') || desc.includes('geforce');
-
-                _deviceInfo = {
-                    isAppleSilicon,
-                    isNvidia,
-                    gpu: info.description || info.vendor || 'Unknown GPU',
-                    capable: isAppleSilicon || isNvidia
-                };
-
-                _isCapable = _deviceInfo.capable;
-                console.log(`[ClientAI] Device: ${_deviceInfo.gpu} | Apple Silicon: ${isAppleSilicon} | NVIDIA: ${isNvidia} | Capable: ${_isCapable}`);
                 return _isCapable;
             } catch (e) {
                 console.log('[ClientAI] Detection failed:', e);
@@ -79,28 +174,29 @@ const ClientProcessor = (() => {
             }
         },
 
-        // Check if model is already cached in browser (< 50ms)
+        // ── Check if any model is cached ──
         async isModelCached() {
             try {
                 if (!('caches' in window)) return false;
                 const cache = await caches.open('transformers-cache');
                 const keys = await cache.keys();
-                const hasModel = keys.some(k => k.url.includes('RMBG-2.0') && k.url.includes('onnx'));
-                console.log(`[ClientAI] Model cached: ${hasModel} (${keys.length} cache entries)`);
+                const hasModel = keys.some(k => k.url.includes('RMBG-1.4') && k.url.includes('onnx'));
+                console.log(`[ClientAI] Model cached: ${hasModel} (${keys.length} entries)`);
                 return hasModel;
-            } catch {
-                return false;
-            }
+            } catch { return false; }
         },
 
-        // Initialize model — downloads if needed, loads from cache if available
-        async initModel(onProgress) {
-            if (_isModelReady) return true;
-            if (_initPromise) return _initPromise;
+        // ── Initialize a model by quality mode ──
+        async initModel(onProgress, quality = 'hd') {
+            // Normalize: 'fast' always goes to server, 'hd' and 'best' can be client-side
+            const key = (quality === 'best') ? 'best' : 'hd';
+            const entry = _models[key];
 
-            _initPromise = (async () => {
-                _isDownloading = true;
+            if (entry.ready) return true;
+            if (entry.promise) return entry.promise;
 
+            entry.promise = (async () => {
+                entry.loading = true;
                 try {
                     const { AutoModel, AutoProcessor } = await loadLibrary();
 
@@ -111,44 +207,72 @@ const ClientProcessor = (() => {
                         }
                     };
 
-                    console.log('[ClientAI] Loading processor...');
-                    _processor = await AutoProcessor.from_pretrained(MODEL_ID, {
+                    console.log(`[ClientAI] Loading ${entry.id} (${_device}, ${_modelDtype})...`);
+
+                    // Load processor
+                    entry.processor = await AutoProcessor.from_pretrained(entry.id, {
                         progress_callback: progressCallback
                     });
 
-                    console.log('[ClientAI] Loading model (WebGPU)...');
-                    _model = await AutoModel.from_pretrained(MODEL_ID, {
-                        device: 'webgpu',
-                        dtype: 'fp32',
+                    // Load model on best available device
+                    const modelOpts = {
+                        device: _device,
                         progress_callback: progressCallback
-                    });
+                    };
 
-                    _isModelReady = true;
-                    _isDownloading = false;
-                    console.log('[ClientAI] Model ready!');
+                    // dtype config based on device
+                    if (_device === 'webgpu') {
+                        modelOpts.dtype = _modelDtype;  // fp16 or fp32
+                    } else {
+                        // WASM: use quantized for speed
+                        modelOpts.dtype = 'q8';
+                    }
+
+                    entry.model = await AutoModel.from_pretrained(entry.id, modelOpts);
+
+                    entry.ready = true;
+                    entry.loading = false;
+                    _activeModelKey = key;
+                    console.log(`[ClientAI] ${entry.id} ready on ${_device}!`);
                     onProgress?.(100, 'ready');
                     return true;
                 } catch (e) {
-                    console.error('[ClientAI] Model init failed:', e);
-                    _isDownloading = false;
+                    console.error(`[ClientAI] Failed to load ${entry.id}:`, e);
+                    entry.loading = false;
+                    entry.promise = null;
+
+                    // If WebGPU failed, try WASM fallback
+                    if (_device === 'webgpu') {
+                        console.log('[ClientAI] WebGPU failed, trying WASM fallback...');
+                        _device = 'wasm';
+                        _wasmFallback = true;
+                        _modelDtype = 'q8';
+                        if (_deviceInfo) {
+                            _deviceInfo.device = 'wasm';
+                            _deviceInfo.dtype = 'q8';
+                        }
+                        return this.initModel(onProgress, quality);
+                    }
+
                     _isCapable = false;
-                    _initPromise = null;
                     return false;
                 }
             })();
 
-            return _initPromise;
+            return entry.promise;
         },
 
-        // Remove background client-side using WebGPU
-        async removeBackground(imageSource) {
-            if (!_isModelReady || !_model || !_processor) {
-                throw new Error('Model not ready');
+        // ── Remove background: picks right model based on quality ──
+        async removeBackground(imageSource, quality = 'hd') {
+            const key = (quality === 'best') ? 'best' : 'hd';
+            const entry = _models[key];
+
+            if (!entry.ready || !entry.model || !entry.processor) {
+                throw new Error(`Model not ready for ${quality} mode`);
             }
 
             const { RawImage } = await loadLibrary();
 
-            // Load image from File, Blob, or URL
             let imageURL;
             if (imageSource instanceof File || imageSource instanceof Blob) {
                 imageURL = URL.createObjectURL(imageSource);
@@ -157,33 +281,25 @@ const ClientProcessor = (() => {
             }
 
             try {
-                console.log('[ClientAI] Processing image...');
                 const startTime = performance.now();
+                console.log(`[ClientAI] Processing (${quality} mode, ${_device})...`);
 
                 // Load and preprocess
                 const image = await RawImage.fromURL(imageURL);
-                const { pixel_values } = await _processor(image);
+                const { pixel_values } = await entry.processor(image);
 
-                // Run inference on WebGPU
-                const { output } = await _model({ input: pixel_values });
+                // Run inference
+                const { output } = await entry.model({ input: pixel_values });
 
-                // Post-process: create mask at original resolution
-                const maskTensor = output[0].mul(255).to('uint8');
-                const maskImage = new RawImage(
-                    maskTensor.data,
-                    maskTensor.dims[maskTensor.dims.length - 1],
-                    maskTensor.dims[maskTensor.dims.length - 2],
-                    1
-                );
-                const resizedMask = await maskImage.resize(image.width, image.height);
+                // Build mask at original resolution
+                const resizedMask = await buildMask(output, image.width, image.height, entry.needsSigmoid);
 
-                // Apply mask to original image on canvas
+                // Apply mask to original image via canvas
                 const canvas = document.createElement('canvas');
                 canvas.width = image.width;
                 canvas.height = image.height;
                 const ctx = canvas.getContext('2d');
 
-                // Draw original image
                 const imgEl = new Image();
                 await new Promise((resolve, reject) => {
                     imgEl.onload = resolve;
@@ -192,7 +308,7 @@ const ClientProcessor = (() => {
                 });
                 ctx.drawImage(imgEl, 0, 0, image.width, image.height);
 
-                // Apply mask as alpha channel
+                // Apply alpha mask
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const maskData = resizedMask.data;
                 for (let i = 0; i < maskData.length; i++) {
@@ -200,13 +316,17 @@ const ClientProcessor = (() => {
                 }
                 ctx.putImageData(imageData, 0, 0);
 
-                // Export as WebP blob
-                const blob = await new Promise((resolve) => {
-                    canvas.toBlob(resolve, 'image/webp', 0.95);
-                });
+                // Export as WebP
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.95));
 
                 const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-                console.log(`[ClientAI] Processed in ${elapsed}s, output: ${(blob.size / 1024).toFixed(0)}KB`);
+                console.log(`[ClientAI] ✅ ${quality} done in ${elapsed}s on ${_device} (${(blob.size / 1024).toFixed(0)}KB)`);
+
+                // Free GPU tensors
+                try {
+                    pixel_values?.dispose?.();
+                    output?.[0]?.dispose?.();
+                } catch {}
 
                 return blob;
             } finally {
@@ -216,21 +336,39 @@ const ClientProcessor = (() => {
             }
         },
 
-        // Upload client-processed image to R2 via server (no processing needed server-side)
+        // ── Smart routing: should this quality mode use server? ──
+        shouldUseServer(quality = 'fast') {
+            // Fast mode: always server (Silueta is tiny and fast)
+            if (quality === 'fast') return true;
+
+            // Mobile: always server
+            if (isMobile()) return true;
+
+            // Not capable at all
+            if (!_isCapable) return true;
+
+            // Check if the requested model is ready
+            const key = (quality === 'best') ? 'best' : 'hd';
+            if (!_models[key].ready) return true;
+
+            return false;
+        },
+
+        // ── Check if a specific quality model is ready ──
+        isQualityReady(quality) {
+            if (quality === 'fast') return false; // fast = server only
+            const key = (quality === 'best') ? 'best' : 'hd';
+            return _models[key].ready;
+        },
+
+        // ── Upload processed image to R2 ──
         async uploadToR2(blob, filename) {
             try {
                 const formData = new FormData();
                 formData.append('image', blob, filename || 'processed.webp');
-
-                const response = await fetch('/api/upload-to-r2', {
-                    method: 'POST',
-                    body: formData
-                });
-
+                const response = await fetch('/api/upload-to-r2', { method: 'POST', body: formData });
                 const data = await response.json();
-                if (data.success) {
-                    console.log('[ClientAI] R2 upload success:', data.key);
-                }
+                if (data.success) console.log('[ClientAI] R2 upload:', data.key);
                 return data;
             } catch (e) {
                 console.error('[ClientAI] R2 upload failed:', e);

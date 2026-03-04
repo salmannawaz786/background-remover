@@ -4,8 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Background Remover</title>
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#f59e0b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="BG Remover">
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="../static/images/logo.png">
+    <link rel="apple-touch-icon" href="../static/images/logo.png">
     <!-- Dotlottie Player for animations -->
     <script src="https://unpkg.com/@dotlottie/player-component@2.7.8/dist/dotlottie-player.mjs" type="module"></script>
     <link rel="stylesheet" href="../static/navbar.css">
@@ -13,8 +20,12 @@
     <link rel="stylesheet" href="../static/footer.css">
     <link rel="stylesheet" href="../static/theme-toggle.css">
     <link rel="stylesheet" href="../static/quality-toggle.css">
+    <link rel="stylesheet" href="../static/pwa-install.css">
     <script defer src="../static/scripts.js"></script>
-    <script defer src="../static/client-processor.js"></script>
+    <!-- ONNX Runtime for client-side AI -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js"></script>
+    <script defer src="../static/client-processor-v2.js"></script>
+    <script defer src="../static/pwa-install.js"></script>
     <link rel="stylesheet" href="../static/theme.css">
     <script src="https://kit.fontawesome.com/0401efc0fe.js" crossorigin="anonymous"></script>
     <script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateInit"></script>
@@ -57,33 +68,15 @@
             </div>
         </div>
         <div class="tools-menu">
-            <div class="menu-item-wrapper">
-                <span class="tools-link">Tools</span>
-                <div class="tools-dropdown">
-                    <a href="https://backgroundremover.sallulabs.com" class="dropdown-item">
-                        <div class="dropdown-item-icon">🖼️</div>
-                        <div class="dropdown-item-text">BG Remover</div>
-                    </a>
-                    <a href="https://fontgenerator.sallulabs.com/" class="dropdown-item">
-                        <div class="dropdown-item-icon">🔤</div>
-                        <div class="dropdown-item-text">Font Generator</div>
-                    </a>
-                    <a href="https://sallulabs.com/CSSExtractor" class="dropdown-item">
-                        <div class="dropdown-item-icon">✨</div>
-                        <div class="dropdown-item-text">CSS Extractor</div>
-                    </a>
-                    <a href="https://sallulabs.com/HadithSearchEngine" class="dropdown-item">
-                        <div class="dropdown-item-icon">📖</div>
-                        <div class="dropdown-item-text">Hadith Search Engine </div>
-                    </a>
-                    <a href="https://sallulabs.com/tools" class="dropdown-item">
-                        <div class="dropdown-item-icon">⛏</div>
-                        <div class="dropdown-item-text">View More</div>
-                    </a>
-                </div>
-            </div>
-            <a href="https://sallulabs.com/Pricing" class="tools-link">Pricing</a>
             <a href="https://sallulabs.com/about" class="tools-link">About</a>
+            <button class="tools-link install-btn" id="navbar-install-btn" style="display: none;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Install
+            </button>
         </div>
         <div class="nav-right">
             <div class="user-credits">
@@ -96,30 +89,15 @@
         </div>
         <div class="mobile-menu">
             <div class="tools-menu">
-                <div class="menu-item-wrapper">
-                    <span class="tools-link">Tools</span>
-                    <div class="tools-dropdown">
-                          <a href="https://backgroundremover.sallulabs.com" class="dropdown-item">
-                        <div class="dropdown-item-icon">🖼️</div>
-                        <div class="dropdown-item-text">BG Remover</div>
-                    </a>
-                    <a href="https://fontgenerator.sallulabs.com/" class="dropdown-item">
-                        <div class="dropdown-item-icon">🔤</div>
-                        <div class="dropdown-item-text">Font Generator</div>
-                    </a>
-                    <a href="/CSSExtractor" class="dropdown-item">
-                        <div class="dropdown-item-icon">✨</div>
-                        <div class="dropdown-item-text">CSS Extractor</div>
-                    </a>
-                    <a href="/HadithSearchEngine" class="dropdown-item">
-                        <div class="dropdown-item-icon">📖</div>
-                        <div class="dropdown-item-text">Hadith Search Engine </div>
-                        </a>
-                    </div>
-                </div>
-                <a href="/pricing" class="tools-link">Pricing</a>
                 <a href="/about" class="tools-link">About</a>
-                <a href="/blog" class="tools-link">Blog</a>
+                <button class="tools-link install-btn" id="navbar-install-btn-mobile" style="display: none;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Install
+                </button>
             </div>
             <div class="nav-right">
                 <div class="user-credits">
@@ -164,14 +142,15 @@
             <div class="mode-selector">
                 <button class="mode-button active" data-mode="single">Single Image</button>
                 <button class="mode-button" data-mode="batch">Multiple Images</button>
-                <!-- Speed / HD Mode Toggle -->
-                <div class="hd-quality-container">
-                    <span class="hd-label speed-label">Speed</span>
-                    <label class="toggle-switch" id="hd-toggle-wrapper">
-                        <input type="checkbox" id="hd-quality-toggle" />
-                        <span class="slider"></span>
-                    </label>
-                    <span class="hd-label hd-label-text">HD</span>
+                <!-- Quality Mode Selector -->
+                <div class="quality-selector">
+                    <button class="quality-btn active" data-quality="fast" title="Fast removal (~3s)">
+                        <span class="quality-icon">⚡</span> Fast
+                    </button>
+                    <button class="quality-btn pro-btn" id="pro-quality-btn" data-quality="pro" title="High-quality BiRefNet AI (~8s) — Sign in required">
+                        <span class="quality-icon">✨</span> Pro
+                        <span class="pro-lock-icon" id="pro-lock-icon">🔒</span>
+                    </button>
                 </div>
             </div>
 
@@ -223,26 +202,59 @@
             <div id="success-notification">Background removed successfully!</div>
         </div>
     </div>
-     <div class="offline-download-section">
-                <div class="offline-content">
-                    <h3>🖥️ Want to try the offline version?</h3>
-                    <p>Download our desktop app for faster processing without internet!</p>
-                    <div class="download-buttons">
-                        <a href="#" class="offline-btn windows-btn" id="download-windows">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
-                            </svg>
-                            Windows
-                        </a>
-                        <a href="#" class="offline-btn mac-btn" id="download-mac">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-                            </svg>
-                            macOS
-                        </a>
-                    </div>
+    <!-- Sign-in Prompt Modal — shown after first BG removal for non-auth users -->
+    <div class="signin-prompt-modal" id="signin-prompt-modal">
+        <div class="signin-prompt-content">
+            <button class="signin-prompt-close" onclick="closeSignInPrompt()">&times;</button>
+            <div class="signin-prompt-icon">🎉</div>
+            <h3>Nice! Your first background removed</h3>
+            <p>Sign in for <strong>unlimited</strong> free removals and sync across devices</p>
+            <div class="signin-prompt-actions">
+                <a href="/login" class="signin-prompt-btn primary">Sign In</a>
+                <a href="/signup" class="signin-prompt-btn secondary">Create Account</a>
+            </div>
+            <button class="signin-prompt-skip" onclick="closeSignInPrompt()">Continue without signing in</button>
+        </div>
+    </div>
+
+    <!-- Desktop App Install Section (desktop only, not a floating banner) -->
+    <section class="desktop-install-section" id="desktop-install-section">
+        <div class="desktop-install-container">
+            <div class="desktop-install-content">
+                <div class="desktop-install-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                </div>
+                <div class="desktop-install-text">
+                    <h3>Install Desktop App</h3>
+                    <p>Works on <strong>Windows</strong> & <strong>Mac</strong>. AI runs 100% on your device — faster, private, and works offline!</p>
                 </div>
             </div>
+            <button class="desktop-install-btn coming-soon-btn" id="pwa-install-btn" disabled title="Desktop app coming soon!">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                Coming Soon
+            </button>
+        </div>
+    </section>
+
+    <!-- PWA Splash Screen — shown while loading model (PWA only) -->
+    <div class="pwa-splash" id="pwa-splash">
+        <div class="pwa-splash-inner">
+            <dotlottie-player src="/static/dogie_running.lottie" background="transparent" speed="1" style="width: 180px; height: 180px;" loop autoplay></dotlottie-player>
+            <h2 id="pwa-splash-title">Setting Up AI...</h2>
+            <p id="pwa-splash-subtitle">Preparing your device for instant background removal</p>
+            <div class="pwa-splash-progress">
+                <div class="pwa-splash-progress-fill" id="pwa-splash-progress-fill"></div>
+            </div>
+            <span class="pwa-splash-percent" id="pwa-splash-percent">0%</span>
+        </div>
+    </div>
 <footer>
         <div class="footer-container">
           <div class="footer-content">
@@ -373,12 +385,60 @@
         let currentMode = 'single';
         let uploadedFiles = [];
         let processedImages = [];
+        const SERVER_ONLY_MODE = false; // Smart routing: RVM (persons) / RMBG (objects) client-side
+
+        let selectedQualityMode = 'fast';
+        let _isUserLoggedIn = false; // updated by Firebase auth state
+
+        function getSelectedModelMode() {
+            return selectedQualityMode;
+        }
+
+        // Update pro button UI based on auth state
+        function updateProButtonState(loggedIn) {
+            _isUserLoggedIn = loggedIn;
+            const lockIcon = document.getElementById('pro-lock-icon');
+            const proBtn = document.getElementById('pro-quality-btn');
+            if (!lockIcon || !proBtn) return;
+            if (loggedIn) {
+                lockIcon.style.display = 'none';
+                proBtn.classList.remove('pro-locked');
+                proBtn.title = 'High-quality BiRefNet AI (~8s)';
+            } else {
+                lockIcon.style.display = 'inline';
+                proBtn.classList.add('pro-locked');
+                proBtn.title = 'Sign in to unlock Pro quality';
+            }
+        }
+
+        // Quality mode selector
+        document.querySelectorAll('.quality-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const quality = btn.dataset.quality;
+                // Pro mode: require auth
+                if (quality === 'pro' && !_isUserLoggedIn) {
+                    showSignInPrompt();
+                    return;
+                }
+                document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedQualityMode = quality;
+            });
+        });
 
         modeButtons.forEach(button => {
             button.addEventListener('click', () => {
+                const mode = button.dataset.mode;
+                
+                // Batch mode requires authentication
+                if (mode === 'batch' && !_isUserLoggedIn) {
+                    showSignInPrompt('Batch processing requires an account. Sign in to process multiple images at once!');
+                    return;
+                }
+                
                 modeButtons.forEach(btn => btn.classList.remove('active'));
                 button.classList.add('active');
-                currentMode = button.dataset.mode;
+                currentMode = mode;
                 
                 imageInput.multiple = currentMode === 'batch';
                 clearImages();
@@ -463,15 +523,26 @@
             }
         }
 
-        // Process a single image via client-side AI or server fallback
-        async function processImageClientSide(file) {
+        // Process a single image via client-side AI (RVM for persons, RMBG for objects)
+        async function processImageClientSide(imageElement, mode) {
             try {
-                const blob = await ClientProcessor.removeBackground(file);
-                // Upload to R2 in background (fire-and-forget)
-                ClientProcessor.uploadToR2(blob, file.name);
-                return blob;
+                if (typeof ClientProcessor === 'undefined') return null;
+                
+                const result = await ClientProcessor.processImage(imageElement, mode);
+                
+                if (result.success) {
+                    // Convert dataURL to blob
+                    const response = await fetch(result.dataUrl);
+                    const blob = await response.blob();
+                    console.log(`[ClientAI] Processed with ${result.model} (${result.isPerson ? 'person' : 'object'})`);
+                    return blob;
+                } else {
+                    // Model not ready - start download if needed
+                    console.log(`[ClientAI] ${result.needsModel} not ready, using server`);
+                    return null;
+                }
             } catch (e) {
-                console.log('[ClientAI] Client processing failed, falling back to server:', e.message);
+                console.log('[ClientAI] Client processing failed:', e.message);
                 return null;
             }
         }
@@ -479,8 +550,10 @@
         async function processImageServer(file) {
             const formData = new FormData();
             formData.append('image_file', file);
-            const hdToggle = document.getElementById('hd-quality-toggle');
-            formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
+            const modelMode = getSelectedModelMode();
+            formData.append('model', modelMode);
+            // Keep legacy field for older server builds
+            formData.append('hd_quality', modelMode === 'hd' ? 'true' : 'false');
 
             const response = await fetch('/upload', {
                 method: 'POST',
@@ -502,8 +575,16 @@
             }
         }
 
+        // Track removals for non-auth users
+        let bgRemovalCount = parseInt(localStorage.getItem('bgRemovalCount') || '0');
+
         async function processImage(file) {
             if (file) {
+                // Start silent model download on first image (WEB only, not PWA)
+                if (!SERVER_ONLY_MODE && typeof window.startSilentModelDownload === 'function') {
+                    window.startSilentModelDownload();
+                }
+
                 // Clear previous results before processing new image
                 if (comparisonContainer) comparisonContainer.style.display = 'none';
                 downloadButton.style.display = 'none';
@@ -517,10 +598,15 @@
 
                 try {
                     let blob = null;
+                    const quality = getSelectedModelMode();
 
-                    // Try client-side processing first (Apple Silicon / NVIDIA)
-                    if (typeof ClientProcessor !== 'undefined' && ClientProcessor.isModelReady) {
-                        blob = await processImageClientSide(file);
+                    // Try client-side first (smart routing: RVM for persons, RMBG for objects)
+                    if (!SERVER_ONLY_MODE && typeof ClientProcessor !== 'undefined') {
+                        // Create image element for client processing
+                        const img = new Image();
+                        img.src = originalURL;
+                        await new Promise(resolve => { img.onload = resolve; });
+                        blob = await processImageClientSide(img, quality);
                     }
 
                     // Fallback to server
@@ -552,6 +638,18 @@
                         imageInput.value = '';
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';
+
+                        // Track removal count and prompt sign-in after first removal
+                        bgRemovalCount++;
+                        localStorage.setItem('bgRemovalCount', bgRemovalCount.toString());
+                        
+                        // Check if user is not logged in and this is their first removal
+                        const isLoggedIn = typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser;
+                        if (!isLoggedIn && bgRemovalCount === 1) {
+                            setTimeout(() => {
+                                showSignInPrompt();
+                            }, 1500);
+                        }
                     } else {
                         uploadButton.style.display = 'block';
                         dropArea.style.display = 'block';
@@ -565,6 +663,17 @@
                     loader.style.display = 'none';
                 }
             }
+        }
+
+        // Show sign-in prompt modal after first removal
+        function showSignInPrompt() {
+            const modal = document.getElementById('signin-prompt-modal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeSignInPrompt() {
+            const modal = document.getElementById('signin-prompt-modal');
+            if (modal) modal.classList.remove('active');
         }
 
         function displayImagePreview(file) {
@@ -626,17 +735,26 @@
                 
                 try {
                     let blob = null;
+                    const batchQuality = getSelectedModelMode();
 
-                    // Try client-side processing first
-                    if (typeof ClientProcessor !== 'undefined' && ClientProcessor.isModelReady) {
-                        blob = await processImageClientSide(file);
+                    // Try client-side first (smart routing: RVM for persons, RMBG for objects)
+                    if (!SERVER_ONLY_MODE && typeof ClientProcessor !== 'undefined') {
+                        // Create image element for client processing
+                        const img = new Image();
+                        const url = URL.createObjectURL(file);
+                        img.src = url;
+                        await new Promise(resolve => { img.onload = resolve; });
+                        blob = await processImageClientSide(img, batchQuality);
+                        URL.revokeObjectURL(url);
                     }
 
                     // Fallback to server
                     if (!blob) {
                         const formData = new FormData();
                         formData.append('image_file', file);
-                        formData.append('hd_quality', hdToggle.checked ? 'true' : 'false');
+                        const modelMode = getSelectedModelMode();
+                        formData.append('model', modelMode);
+                        formData.append('hd_quality', modelMode === 'hd' ? 'true' : 'false');
                         const response = await fetch('/upload', { method: 'POST', body: formData });
                         if (response.ok) {
                             blob = await response.blob();
@@ -709,99 +827,116 @@
             });
         });
 
-        // Speed / HD Mode Toggle
-        const hdToggle = document.getElementById('hd-quality-toggle');
-        const speedLabel = document.querySelector('.speed-label');
-        const hdLabel = document.querySelector('.hd-label-text');
-
-        hdToggle.addEventListener('change', () => {
-            if (hdToggle.checked) {
-                speedLabel.style.opacity = '0.5';
-                hdLabel.style.opacity = '1';
-                hdLabel.style.fontWeight = '700';
-                speedLabel.style.fontWeight = '400';
-            } else {
-                speedLabel.style.opacity = '1';
-                hdLabel.style.opacity = '0.5';
-                speedLabel.style.fontWeight = '700';
-                hdLabel.style.fontWeight = '400';
-            }
-        });
-
-        // Set initial state
-        speedLabel.style.fontWeight = '700';
-        hdLabel.style.opacity = '0.5';
+        // Quality mode is now handled by the quality-btn click handlers above
 
         // ── Client-side AI initialization ──
-        // Detects Apple Silicon / NVIDIA GPU, downloads model in background
+        // TWO MODES:
+        // 1. WEB: Silent background download on first image upload, use server meanwhile
+        // 2. PWA (standalone): Full splash screen with progress on app launch
+        
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+        
+        // Tips to show during PWA loading
+        const loadingTips = [
+            "💡 Tip: AI runs 100% on your device — your images never leave your computer",
+            "💡 Tip: Works offline! No internet needed after setup",
+            "💡 Tip: Drag & drop multiple images for batch processing",
+            "💡 Tip: HD mode gives sharper edges for detailed subjects",
+            "💡 Tip: Fast mode is perfect for quick previews",
+            "💡 Tip: All processing happens locally — completely private"
+        ];
+        let tipIndex = 0;
+        let tipInterval = null;
+
         (async function initClientAI() {
             if (typeof ClientProcessor === 'undefined') return;
+            if (SERVER_ONLY_MODE) return;
 
-            const badge = document.getElementById('ai-status-badge');
-            const icon = document.getElementById('ai-status-icon');
-            const text = document.getElementById('ai-status-text');
-            const bar = document.getElementById('ai-progress-bar');
-            const fill = document.getElementById('ai-progress-fill');
+            const splash = document.getElementById('pwa-splash');
+            const splashTitle = document.getElementById('pwa-splash-title');
+            const splashSub = document.getElementById('pwa-splash-subtitle');
+            const splashFill = document.getElementById('pwa-splash-progress-fill');
+            const splashPercent = document.getElementById('pwa-splash-percent');
 
-            // 1. Fast device detection
+            // 1. Fast device detection (~50ms)
             const capable = await ClientProcessor.detectDevice();
-            if (!capable) return; // Not a supported device — use server silently
+            if (!capable) return; // Mobile or unsupported — use server silently
 
-            const gpuName = ClientProcessor.deviceInfo.gpu || 'GPU';
-            const shortGpu = ClientProcessor.deviceInfo.isAppleSilicon ? 'Apple Silicon' : 'NVIDIA GPU';
-
-            // 2. Check if model is already cached
+            const shortGpu = ClientProcessor.deviceInfo.gpuShort || ClientProcessor.deviceInfo.gpu || 'GPU';
+            const dtype = ClientProcessor.deviceInfo.dtype || 'fp32';
             const cached = await ClientProcessor.isModelCached();
 
-            if (cached) {
-                // Model cached — load instantly, show ready badge
-                badge.style.display = 'flex';
-                icon.textContent = '⚡';
-                text.textContent = `Loading AI on ${shortGpu}...`;
-
-                const ok = await ClientProcessor.initModel();
-                if (ok) {
-                    icon.textContent = '⚡';
-                    text.textContent = `Running on your ${shortGpu}`;
-                    badge.classList.add('ai-ready');
-                    // Auto-hide after 3 seconds
-                    setTimeout(() => {
-                        badge.style.opacity = '0';
-                        setTimeout(() => { badge.style.display = 'none'; }, 300);
-                    }, 3000);
+            // ═══════════════════════════════════════════════════════════════
+            // PWA MODE: Show splash screen, download/load model, then show app
+            // ═══════════════════════════════════════════════════════════════
+            if (isStandalone) {
+                splash.classList.add('active');
+                
+                if (cached) {
+                    splashTitle.textContent = 'Loading AI Engine...';
+                    splashSub.textContent = `Warming up ${shortGpu} for instant processing`;
                 } else {
-                    badge.style.display = 'none';
+                    splashTitle.textContent = 'Setting Up AI...';
+                    splashSub.textContent = 'Downloading AI model for offline use';
                 }
-            } else {
-                // Model not cached — download in background while user uses server
-                badge.style.display = 'flex';
-                icon.textContent = '🔄';
-                text.textContent = `Optimizing for your ${shortGpu}...`;
-                bar.style.display = 'block';
-                fill.style.width = '0%';
+                splashFill.style.width = '5%';
+                splashPercent.textContent = '0%';
+
+                // Rotate tips every 3 seconds
+                tipInterval = setInterval(() => {
+                    tipIndex = (tipIndex + 1) % loadingTips.length;
+                    splashSub.textContent = loadingTips[tipIndex];
+                }, 3000);
 
                 const ok = await ClientProcessor.initModel((progress, file) => {
-                    fill.style.width = progress + '%';
-                    if (progress >= 100) {
-                        bar.style.display = 'none';
-                    }
-                });
+                    const p = Math.max(5, progress);
+                    splashFill.style.width = p + '%';
+                    splashPercent.textContent = Math.round(p) + '%';
+                }, 'hd'); // Pre-load HD model (also used for Best)
+
+                clearInterval(tipInterval);
 
                 if (ok) {
-                    bar.style.display = 'none';
-                    icon.textContent = '⚡';
-                    text.textContent = `Running on your ${shortGpu}`;
-                    badge.classList.add('ai-ready');
-                    // Auto-hide after 3 seconds
-                    setTimeout(() => {
-                        badge.style.opacity = '0';
-                        setTimeout(() => { badge.style.display = 'none'; }, 300);
-                    }, 3000);
-                } else {
-                    badge.style.display = 'none';
+                    splashFill.style.width = '100%';
+                    splashPercent.textContent = '100%';
+                    splashTitle.textContent = 'Ready!';
+                    splashSub.textContent = `AI engine loaded on ${shortGpu}`;
+                    await new Promise(r => setTimeout(r, 800));
                 }
+                splash.classList.remove('active');
+                return;
             }
+
+            // ═══════════════════════════════════════════════════════════════
+            // WEB MODE: Silent background download on first image upload
+            // No banners, no badges — completely invisible to user
+            // Server handles all requests until model is ready
+            // ═══════════════════════════════════════════════════════════════
+            if (cached) {
+                // Model cached — load silently in background
+                console.log('[ClientAI] Model cached, loading silently...');
+                ClientProcessor.initModel(null, 'hd').then(ok => {
+                    if (ok) console.log('[ClientAI] Ready! Next HD/Best images will use on-device AI');
+                });
+            }
+            // If not cached, we'll start download on first image upload (see processImage)
         })();
+
+        // Start silent background download when user uploads first image (WEB only)
+        window.startSilentModelDownload = function() {
+            if (isStandalone) return; // PWA already handled above
+            if (typeof ClientProcessor === 'undefined') return;
+            if (ClientProcessor.isRVMReady || ClientProcessor.isRVMDownloading) return;
+            
+            console.log('[ClientAI] First image upload — starting RVM download...');
+            ClientProcessor.loadRVM((progress) => {
+                if (progress < 1) {
+                    console.log(`[ClientAI] RVM download: ${Math.round(progress*100)}%`);
+                } else {
+                    console.log('[ClientAI] RVM ready! Person images will use on-device AI');
+                }
+            });
+        };
         
     </script>
     <script>

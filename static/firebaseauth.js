@@ -479,6 +479,9 @@ onAuthStateChanged(auth, async (user) => {
                 elem.style.display = 'none';
             });
 
+            // Unlock pro mode button
+            if (typeof updateProButtonState === 'function') updateProButtonState(true);
+
         } catch (error) {
             console.error('Token verification error:', error);
             await handleLogout();
@@ -496,7 +499,8 @@ onAuthStateChanged(auth, async (user) => {
             elem.style.display = 'block';
         });
 
-       
+        // Lock pro mode button
+        if (typeof updateProButtonState === 'function') updateProButtonState(false);
     }
 });
 
