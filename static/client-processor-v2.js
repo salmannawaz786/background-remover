@@ -433,21 +433,41 @@ const ClientProcessor = (() => {
         let ctx = canvas.getContext('2d');
         ctx.drawImage(imageElement, 0, 0, SIZE, SIZE);
         
+        // Yield to UI before heavy computation
+        await new Promise(resolve => setTimeout(resolve, 0));
+        
         const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
         const data = imageData.data;
         
         // Prepare tensor (1, 3, 1024, 1024) normalized: (x/255 - 0.5)
         const input = new Float32Array(3 * SIZE * SIZE);
-        for (let i = 0; i < SIZE * SIZE; i++) {
-            input[i] = data[i * 4] / 255 - 0.5;              // R
-            input[SIZE * SIZE + i] = data[i * 4 + 1] / 255 - 0.5;  // G
-            input[2 * SIZE * SIZE + i] = data[i * 4 + 2] / 255 - 0.5;  // B
+        const totalPixels = SIZE * SIZE;
+        const chunkSize = 100000; // Process 100k pixels at a time
+        
+        for (let start = 0; start < totalPixels; start += chunkSize) {
+            const end = Math.min(start + chunkSize, totalPixels);
+            for (let i = start; i < end; i++) {
+                input[i] = data[i * 4] / 255 - 0.5;              // R
+                input[SIZE * SIZE + i] = data[i * 4 + 1] / 255 - 0.5;  // G
+                input[2 * SIZE * SIZE + i] = data[i * 4 + 2] / 255 - 0.5;  // B
+            }
+            // Yield to UI every 100k pixels
+            if (end < totalPixels) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
         }
         
         const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
         
         const inputName = _rmbgSession.inputNames[0];
+        
+        // Yield before inference (heaviest operation)
+        await new Promise(resolve => setTimeout(resolve, 0));
+        
         const results = await _rmbgSession.run({ [inputName]: inputTensor });
+        
+        // Yield after inference
+        await new Promise(resolve => setTimeout(resolve, 0));
         
         // Get mask output
         const outputName = _rmbgSession.outputNames[0];
@@ -461,6 +481,9 @@ const ClientProcessor = (() => {
         }
         const range = max - min || 1;
         
+        // Yield before output processing
+        await new Promise(resolve => setTimeout(resolve, 0));
+        
         // Create output at original size
         const outCanvas = document.createElement('canvas');
         outCanvas.width = W;
@@ -471,18 +494,32 @@ const ClientProcessor = (() => {
         const outData = outCtx.getImageData(0, 0, W, H);
         const outPixels = outData.data;
         
-        // Resize mask from 1024x1024 to WxH
-        for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-                const srcX = Math.floor(x * SIZE / W);
-                const srcY = Math.floor(y * SIZE / H);
-                const srcIdx = srcY * SIZE + srcX;
-                const alpha = ((mask[srcIdx] - min) / range) * 255;
-                outPixels[(y * W + x) * 4 + 3] = Math.round(alpha);
+        // Resize mask from 1024x1024 to WxH with chunked processing
+        const rowsPerChunk = 50; // Process 50 rows at a time
+        for (let startY = 0; startY < H; startY += rowsPerChunk) {
+            const endY = Math.min(startY + rowsPerChunk, H);
+            
+            for (let y = startY; y < endY; y++) {
+                for (let x = 0; x < W; x++) {
+                    const srcX = Math.floor(x * SIZE / W);
+                    const srcY = Math.floor(y * SIZE / H);
+                    const srcIdx = srcY * SIZE + srcX;
+                    const alpha = ((mask[srcIdx] - min) / range) * 255;
+                    outPixels[(y * W + x) * 4 + 3] = Math.round(alpha);
+                }
+            }
+            
+            // Yield to UI every 50 rows
+            if (endY < H) {
+                await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
         
         outCtx.putImageData(outData, 0, 0);
+        
+        // Yield before final conversion
+        await new Promise(resolve => setTimeout(resolve, 0));
+        
         return outCanvas.toDataURL('image/png');
     }
 
