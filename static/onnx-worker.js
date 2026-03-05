@@ -65,54 +65,34 @@ async function handleRunRVM(data, id) {
     }
     
     const { imageData, width, height, downsampleRatio } = data;
+    const W = width;
+    const H = height;
     
-    // Calculate downsampled size
-    const dW = Math.round(width * downsampleRatio);
-    const dH = Math.round(height * downsampleRatio);
-    
-    // Prepare input tensor (1, 3, H, W)
-    const input = new Float32Array(3 * dH * dW);
-    
-    // Downsample and normalize
-    for (let y = 0; y < dH; y++) {
-        for (let x = 0; x < dW; x++) {
-            const srcX = Math.floor(x / downsampleRatio);
-            const srcY = Math.floor(y / downsampleRatio);
-            const srcIdx = (srcY * width + srcX) * 4;
-            const dstIdx = y * dW + x;
-            
-            input[dstIdx] = imageData[srcIdx] / 255;
-            input[dH * dW + dstIdx] = imageData[srcIdx + 1] / 255;
-            input[2 * dH * dW + dstIdx] = imageData[srcIdx + 2] / 255;
-        }
+    // Prepare input tensor at FULL resolution (1, 3, H, W)
+    // Let the model handle downsampling via downsample_ratio parameter
+    const src = new Float32Array(3 * H * W);
+    for (let i = 0; i < H * W; i++) {
+        src[i] = imageData[i * 4] / 255;
+        src[H * W + i] = imageData[i * 4 + 1] / 255;
+        src[2 * H * W + i] = imageData[i * 4 + 2] / 255;
     }
     
-    const inputTensor = new ort.Tensor('float32', input, [1, 3, dH, dW]);
-    const r1 = new ort.Tensor('float32', new Float32Array(1 * 1 * 1 * 1).fill(0), [1, 1, 1, 1]);
-    const r2 = new ort.Tensor('float32', new Float32Array(1 * 1 * 1 * 1).fill(0), [1, 1, 1, 1]);
-    const r3 = new ort.Tensor('float32', new Float32Array(1 * 1 * 1 * 1).fill(0), [1, 1, 1, 1]);
-    const r4 = new ort.Tensor('float32', new Float32Array(1 * 1 * 1 * 1).fill(0), [1, 1, 1, 1]);
-    const downsample = new ort.Tensor('float32', new Float32Array([downsampleRatio]), [1]);
+    const srcTensor = new ort.Tensor('float32', src, [1, 3, H, W]);
+    const r = new ort.Tensor('float32', new Float32Array([0]), [1, 1, 1, 1]);
+    const dsr = new ort.Tensor('float32', new Float32Array([downsampleRatio]), [1]);
     
     const feeds = {
-        src: inputTensor,
-        r1i: r1, r2i: r2, r3i: r3, r4i: r4,
-        downsample_ratio: downsample
+        src: srcTensor,
+        r1i: r, r2i: r, r3i: r, r4i: r,
+        downsample_ratio: dsr
     };
     
     const results = await rvmSession.run(feeds);
     const pha = results.pha.data;
     
-    // Create alpha mask at original resolution
-    const alphaMask = new Float32Array(width * height);
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const srcX = Math.floor(x * downsampleRatio * dW / width);
-            const srcY = Math.floor(y * downsampleRatio * dH / height);
-            const srcIdx = Math.min(srcY, dH - 1) * dW + Math.min(srcX, dW - 1);
-            alphaMask[y * width + x] = pha[srcIdx];
-        }
-    }
+    // Output alpha is already at original resolution
+    const alphaMask = new Float32Array(pha.length);
+    alphaMask.set(pha);
     
     self.postMessage({ id, alphaMask, width, height }, [alphaMask.buffer]);
 }

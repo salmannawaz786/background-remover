@@ -438,9 +438,9 @@ const ClientProcessor = (() => {
             }
         }
         
-        // Fallback to main thread
+        // Fallback to main thread (only if worker failed/unavailable)
         if (!alphaMask) {
-            if (!_rvmSession) throw new Error('RVM not loaded');
+            if (!_rvmSession) throw new Error('RVM not available (worker failed and no main thread session)');
             
             const src = new Float32Array(3 * H * W);
             for (let i = 0; i < H * W; i++) {
@@ -504,9 +504,9 @@ const ClientProcessor = (() => {
             }
         }
         
-        // Fallback to main thread (will block UI)
+        // Fallback to main thread (only if worker failed/unavailable)
         if (!alphaMask) {
-            if (!_rmbgSession) throw new Error('RMBG not loaded');
+            if (!_rmbgSession) throw new Error('RMBG not available (worker failed and no main thread session)');
             console.log('[ClientAI] Running RMBG on main thread (may lag)...');
             
             const SIZE = 1024;
@@ -637,22 +637,28 @@ const ClientProcessor = (() => {
                 // Download model (with caching)
                 const modelBuffer = await downloadModel(MODELS.rvm.id, MODELS.rvm.url, onProgress);
                 
-                // Load into worker if available (non-blocking inference)
+                // Try worker first (preferred - non-blocking inference)
+                let workerLoaded = false;
                 if (_workerReady && _worker) {
                     try {
                         await postToWorker('loadModel', { 
                             modelType: 'rvm', 
                             modelBuffer: modelBuffer 
                         });
-                        console.log('[ClientAI] RVM loaded into worker');
+                        console.log('[ClientAI] RVM loaded into worker (non-blocking mode)');
+                        workerLoaded = true;
                     } catch (workerErr) {
-                        console.warn('[ClientAI] Worker RVM load failed, will use main thread:', workerErr.message);
-                        _workerReady = false; // Disable worker fallback
+                        console.warn('[ClientAI] Worker RVM load failed:', workerErr.message);
+                        _workerReady = false;
                     }
                 }
                 
-                // Load on main thread (always, worker is just bonus)
-                _rvmSession = await createONNXSession(modelBuffer);
+                // Only load main thread if worker failed (saves memory)
+                if (!workerLoaded) {
+                    console.log('[ClientAI] Loading RVM on main thread...');
+                    _rvmSession = await createONNXSession(modelBuffer);
+                }
+                
                 _rvmReady = true;
             } catch (e) {
                 console.error('[ClientAI] RVM load FAILED:', e.message);
@@ -680,22 +686,28 @@ const ClientProcessor = (() => {
                     }
                 });
                 
-                // Load into worker if available (non-blocking inference)
+                // Try worker first (preferred - non-blocking inference)
+                let workerLoaded = false;
                 if (_workerReady && _worker) {
                     try {
                         await postToWorker('loadModel', { 
                             modelType: 'rmbg', 
                             modelBuffer: modelBuffer 
                         });
-                        console.log('[ClientAI] RMBG loaded into worker');
+                        console.log('[ClientAI] RMBG loaded into worker (non-blocking mode)');
+                        workerLoaded = true;
                     } catch (workerErr) {
-                        console.warn('[ClientAI] Worker RMBG load failed, will use main thread:', workerErr.message);
-                        _workerReady = false; // Disable worker fallback
+                        console.warn('[ClientAI] Worker RMBG load failed:', workerErr.message);
+                        _workerReady = false;
                     }
                 }
                 
-                // Load on main thread (always, worker is just bonus)
-                _rmbgSession = await createONNXSession(modelBuffer);
+                // Only load main thread if worker failed (saves memory)
+                if (!workerLoaded) {
+                    console.log('[ClientAI] Loading RMBG on main thread...');
+                    _rmbgSession = await createONNXSession(modelBuffer);
+                }
+                
                 _rmbgReady = true;
                 console.log('[ClientAI] RMBG ready! Objects will use on-device AI');
             } catch (e) {
