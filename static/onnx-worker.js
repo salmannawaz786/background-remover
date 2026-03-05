@@ -11,7 +11,9 @@ let rvmSession = null;
 let rmbgSession = null;
 
 // Configure ONNX Runtime for worker
+// CRITICAL: must set wasmPaths so the worker can find .wasm files
 ort.env.wasm.numThreads = 1;
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
 
 // Handle messages from main thread
 self.onmessage = async function(e) {

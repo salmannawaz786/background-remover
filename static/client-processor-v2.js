@@ -637,16 +637,21 @@ const ClientProcessor = (() => {
                 // Download model (with caching)
                 const modelBuffer = await downloadModel(MODELS.rvm.id, MODELS.rvm.url, onProgress);
                 
-                // Load into worker if available (for non-blocking inference)
+                // Load into worker if available (non-blocking inference)
                 if (_workerReady && _worker) {
-                    await postToWorker('loadModel', { 
-                        modelType: 'rvm', 
-                        modelBuffer: modelBuffer 
-                    });
-                    console.log('[ClientAI] RVM loaded into worker');
+                    try {
+                        await postToWorker('loadModel', { 
+                            modelType: 'rvm', 
+                            modelBuffer: modelBuffer 
+                        });
+                        console.log('[ClientAI] RVM loaded into worker');
+                    } catch (workerErr) {
+                        console.warn('[ClientAI] Worker RVM load failed, will use main thread:', workerErr.message);
+                        _workerReady = false; // Disable worker fallback
+                    }
                 }
                 
-                // Also load on main thread as fallback
+                // Load on main thread (always, worker is just bonus)
                 _rvmSession = await createONNXSession(modelBuffer);
                 _rvmReady = true;
             } catch (e) {
@@ -675,16 +680,21 @@ const ClientProcessor = (() => {
                     }
                 });
                 
-                // Load into worker if available (for non-blocking inference)
+                // Load into worker if available (non-blocking inference)
                 if (_workerReady && _worker) {
-                    await postToWorker('loadModel', { 
-                        modelType: 'rmbg', 
-                        modelBuffer: modelBuffer 
-                    });
-                    console.log('[ClientAI] RMBG loaded into worker');
+                    try {
+                        await postToWorker('loadModel', { 
+                            modelType: 'rmbg', 
+                            modelBuffer: modelBuffer 
+                        });
+                        console.log('[ClientAI] RMBG loaded into worker');
+                    } catch (workerErr) {
+                        console.warn('[ClientAI] Worker RMBG load failed, will use main thread:', workerErr.message);
+                        _workerReady = false; // Disable worker fallback
+                    }
                 }
                 
-                // Also load on main thread as fallback
+                // Load on main thread (always, worker is just bonus)
                 _rmbgSession = await createONNXSession(modelBuffer);
                 _rmbgReady = true;
                 console.log('[ClientAI] RMBG ready! Objects will use on-device AI');
