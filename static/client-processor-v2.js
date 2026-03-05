@@ -1,8 +1,9 @@
 /**
- * Client-Side Background Remover v2.1
+ * Client-Side Background Remover v2.2
  * ====================================
  * Smart routing: Person → RVM, Object → RMBG
  * Uses Cache API for fast model storage
+ * Uses Web Workers for non-blocking inference
  * 
  * CRITICAL ROUTING LOGIC:
  * - Person detected + RVM ready → use RVM locally
@@ -39,6 +40,53 @@ const ClientProcessor = (() => {
     let _faceDetectorSupported = false;
     let _deviceInfo = { capable: true, isMobile: false };
     let _initPromise = null;
+    
+    // Web Worker for non-blocking inference
+    let _worker = null;
+    let _workerReady = false;
+    let _workerCallbacks = {};
+    let _workerMessageId = 0;
+    
+    // ── Web Worker Setup ─────────────────────────────────────────────────────
+    
+    function initWorker() {
+        if (_worker) return Promise.resolve();
+        
+        return new Promise((resolve, reject) => {
+            try {
+                _worker = new Worker('/static/onnx-worker.js');
+                _worker.onmessage = (e) => {
+                    const { id, error, ...data } = e.data;
+                    const callback = _workerCallbacks[id];
+                    if (callback) {
+                        delete _workerCallbacks[id];
+                        if (error) {
+                            callback.reject(new Error(error));
+                        } else {
+                            callback.resolve(data);
+                        }
+                    }
+                };
+                _worker.onerror = (e) => {
+                    console.error('[Worker] Error:', e.message);
+                };
+                _workerReady = true;
+                resolve();
+            } catch (e) {
+                console.warn('[Worker] Failed to create worker, using main thread:', e.message);
+                _workerReady = false;
+                resolve(); // Don't reject, fallback to main thread
+            }
+        });
+    }
+    
+    function postToWorker(type, data) {
+        return new Promise((resolve, reject) => {
+            const id = ++_workerMessageId;
+            _workerCallbacks[id] = { resolve, reject };
+            _worker.postMessage({ type, data, id });
+        });
+    }
 
     // ── Cache API helpers (faster than IndexedDB) ─────────────────────────
 
@@ -240,141 +288,127 @@ const ClientProcessor = (() => {
         } catch {}
     }
 
-    // ── Model Loading with Resume Support ────────────────────────────────────
+    // ── Model Download with Resume Support ────────────────────────────────────
 
-    async function loadONNXSession(modelKey, modelUrl, onProgress) {
+    async function downloadModel(modelKey, modelUrl, onProgress) {
         // Check cache first (complete download)
         let arrayBuffer = await getCachedModel(modelKey);
         
-        if (!arrayBuffer) {
-            // Check for partial download to resume
-            const partial = await getPartialDownload(modelKey);
-            let startByte = 0;
-            let existingChunks = [];
+        if (arrayBuffer) {
+            if (onProgress) onProgress(1);
+            return arrayBuffer;
+        }
+        
+        // Check for partial download to resume
+        const partial = await getPartialDownload(modelKey);
+        let startByte = 0;
+        let existingChunks = [];
+        
+        if (partial && partial.bytesReceived > 0) {
+            startByte = partial.bytesReceived;
+            existingChunks = [partial.buffer];
+        }
+        
+        // Set up fetch with Range header for resume
+        const headers = {};
+        if (startByte > 0) {
+            headers['Range'] = `bytes=${startByte}-`;
+        }
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+            controller.abort();
+        }, 180000);
+        
+        const response = await fetch(modelUrl, { 
+            signal: controller.signal,
+            headers: headers
+        });
+        clearTimeout(timeoutId);
+        
+        const isPartialResponse = response.status === 206;
+        const contentLength = +response.headers.get('Content-Length') || 0;
+        const totalLength = isPartialResponse ? startByte + contentLength : contentLength;
+        
+        if (!response.ok && response.status !== 206) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        if (startByte > 0 && !isPartialResponse) {
+            startByte = 0;
+            existingChunks = [];
+        }
+        
+        const reader = response.body.getReader();
+        let received = startByte;
+        const chunks = [...existingChunks];
+        const startTime = Date.now();
+        let lastSaveTime = Date.now();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
             
-            if (partial && partial.bytesReceived > 0) {
-                // We have a partial download - try to resume
-                startByte = partial.bytesReceived;
-                existingChunks = [partial.buffer];
+            chunks.push(value);
+            received += value.length;
+            
+            if (onProgress && totalLength) {
+                onProgress(received / totalLength);
             }
             
-            try {
-                // Set up fetch with Range header for resume
-                const headers = {};
-                if (startByte > 0) {
-                    headers['Range'] = `bytes=${startByte}-`;
-                }
-                
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => {
-                    controller.abort();
-                }, 180000); // 3 minute initial timeout
-                
-                const response = await fetch(modelUrl, { 
-                    signal: controller.signal,
-                    headers: headers
-                });
-                clearTimeout(timeoutId);
-                
-                // Check if server supports range requests
-                const isPartialResponse = response.status === 206;
-                const contentLength = +response.headers.get('Content-Length') || 0;
-                const totalLength = isPartialResponse ? startByte + contentLength : contentLength;
-                
-                if (!response.ok && response.status !== 206) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                // If server doesn't support range, start fresh
-                if (startByte > 0 && !isPartialResponse) {
-                    startByte = 0;
-                    existingChunks = [];
-                }
-                
-                const reader = response.body.getReader();
-                let received = startByte;
-                const chunks = [...existingChunks];
-                const startTime = Date.now();
-                let lastSaveTime = Date.now();
-                
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    chunks.push(value);
-                    received += value.length;
-                    
-                    if (onProgress && totalLength) {
-                        onProgress(received / totalLength);
-                    }
-                    
-                    // Save partial progress every 5 seconds for resume on tab close
-                    if (Date.now() - lastSaveTime > 5000) {
-                        await cachePartialDownload(modelKey, chunks, received);
-                        saveDownloadProgress(modelKey, received, totalLength);
-                        lastSaveTime = Date.now();
-                    }
-                    
-                    // Check if download is taking too long (>10 minutes total)
-                    if (Date.now() - startTime > 600000) {
-                        // Save progress before giving up
-                        await cachePartialDownload(modelKey, chunks, received);
-                        saveDownloadProgress(modelKey, received, totalLength);
-                        throw new Error('Download taking too long, will resume later');
-                    }
-                }
-                
-                // Combine all chunks
-                arrayBuffer = new Uint8Array(received);
-                let pos = 0;
-                for (const chunk of chunks) {
-                    arrayBuffer.set(chunk, pos);
-                    pos += chunk.length;
-                }
-                arrayBuffer = arrayBuffer.buffer;
-                
-                // Cache complete download
-                await cacheModel(modelKey, arrayBuffer);
-                
-                // Clear partial download data
-                await clearPartialDownload(modelKey);
-                clearDownloadProgress(modelKey);
-                
-            } catch (error) {
-                // Download failed - progress already saved for resume
-                throw error;
+            if (Date.now() - lastSaveTime > 5000) {
+                await cachePartialDownload(modelKey, chunks, received);
+                saveDownloadProgress(modelKey, received, totalLength);
+                lastSaveTime = Date.now();
+            }
+            
+            if (Date.now() - startTime > 600000) {
+                await cachePartialDownload(modelKey, chunks, received);
+                saveDownloadProgress(modelKey, received, totalLength);
+                throw new Error('Download taking too long, will resume later');
             }
         }
         
-        // Create ONNX session
+        // Combine all chunks
+        arrayBuffer = new Uint8Array(received);
+        let pos = 0;
+        for (const chunk of chunks) {
+            arrayBuffer.set(chunk, pos);
+            pos += chunk.length;
+        }
+        arrayBuffer = arrayBuffer.buffer;
+        
+        // Cache complete download
+        await cacheModel(modelKey, arrayBuffer);
+        await clearPartialDownload(modelKey);
+        clearDownloadProgress(modelKey);
+        
+        return arrayBuffer;
+    }
+    
+    // ── ONNX Session Creation ────────────────────────────────────────────────
+    
+    async function createONNXSession(arrayBuffer) {
         if (typeof ort === 'undefined') {
             throw new Error('ONNX Runtime not loaded');
         }
         
-        try {
-            // Disable multi-threading to avoid cross-origin isolation requirement
-            const session = await ort.InferenceSession.create(arrayBuffer, {
-                executionProviders: ['wasm'],
-                graphOptimizationLevel: 'all',
-                executionProviderOptions: {
-                    wasm: {
-                        numThreads: 1  // Single thread to avoid cross-origin issues
-                    }
+        const session = await ort.InferenceSession.create(arrayBuffer, {
+            executionProviders: ['wasm'],
+            graphOptimizationLevel: 'all',
+            executionProviderOptions: {
+                wasm: {
+                    numThreads: 1
                 }
-            });
-            
-            return session;
-        } catch (error) {
-            console.error('[ONNX] Session creation failed:', error);
-            throw error;
-        }
+            }
+        });
+        
+        return session;
     }
 
-    // ── RVM Inference ─────────────────────────────────────────────────────
+    // ── RVM Inference (Worker-enabled for non-blocking UI) ─────────────────
 
     async function runRVM(imageElement, downsampleRatio = 0.5) {
-        if (!_rvmSession) throw new Error('RVM not loaded');
-        
         const canvas = document.createElement('canvas');
         const W = imageElement.naturalWidth || imageElement.width;
         const H = imageElement.naturalHeight || imageElement.height;
@@ -386,141 +420,147 @@ const ClientProcessor = (() => {
         const imageData = ctx.getImageData(0, 0, W, H);
         const data = imageData.data;
         
-        // Prepare src tensor (1, 3, H, W) normalized to 0-1
-        const src = new Float32Array(3 * H * W);
-        for (let i = 0; i < H * W; i++) {
-            src[i] = data[i * 4] / 255;           // R
-            src[H * W + i] = data[i * 4 + 1] / 255;  // G
-            src[2 * H * W + i] = data[i * 4 + 2] / 255;  // B
+        let alphaMask;
+        
+        // Try worker first (non-blocking)
+        if (_workerReady && _worker) {
+            try {
+                const result = await postToWorker('runRVM', {
+                    imageData: data,
+                    width: W,
+                    height: H,
+                    downsampleRatio: downsampleRatio
+                });
+                alphaMask = result.alphaMask;
+            } catch (e) {
+                console.warn('[ClientAI] Worker RVM failed, using main thread:', e.message);
+                alphaMask = null;
+            }
         }
         
-        // RVM inputs
-        const srcTensor = new ort.Tensor('float32', src, [1, 3, H, W]);
-        const r = new ort.Tensor('float32', new Float32Array([0]), [1, 1, 1, 1]);
-        const dsr = new ort.Tensor('float32', new Float32Array([downsampleRatio]), [1]);
-        
-        const results = await _rvmSession.run({
-            src: srcTensor,
-            r1i: r, r2i: r, r3i: r, r4i: r,
-            downsample_ratio: dsr
-        });
-        
-        // Get alpha from output
-        const alpha = results.pha.data;
+        // Fallback to main thread
+        if (!alphaMask) {
+            if (!_rvmSession) throw new Error('RVM not loaded');
+            
+            const src = new Float32Array(3 * H * W);
+            for (let i = 0; i < H * W; i++) {
+                src[i] = data[i * 4] / 255;
+                src[H * W + i] = data[i * 4 + 1] / 255;
+                src[2 * H * W + i] = data[i * 4 + 2] / 255;
+            }
+            
+            const srcTensor = new ort.Tensor('float32', src, [1, 3, H, W]);
+            const r = new ort.Tensor('float32', new Float32Array([0]), [1, 1, 1, 1]);
+            const dsr = new ort.Tensor('float32', new Float32Array([downsampleRatio]), [1]);
+            
+            const results = await _rvmSession.run({
+                src: srcTensor,
+                r1i: r, r2i: r, r3i: r, r4i: r,
+                downsample_ratio: dsr
+            });
+            
+            alphaMask = results.pha.data;
+        }
         
         // Apply alpha to image
         for (let i = 0; i < H * W; i++) {
-            data[i * 4 + 3] = Math.round(alpha[i] * 255);
+            data[i * 4 + 3] = Math.round(alphaMask[i] * 255);
         }
         
         ctx.putImageData(imageData, 0, 0);
         return canvas.toDataURL('image/png');
     }
 
-    // ── RMBG Inference ────────────────────────────────────────────────────
+    // ── RMBG Inference (Worker-enabled for non-blocking UI) ────────────────
 
     async function runRMBG(imageElement) {
-        if (!_rmbgSession) throw new Error('RMBG not loaded');
-        
         const canvas = document.createElement('canvas');
         const W = imageElement.naturalWidth || imageElement.width;
         const H = imageElement.naturalHeight || imageElement.height;
-        const SIZE = 1024;
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(imageElement, 0, 0, W, H);
         
-        // Resize to 1024x1024 for inference
-        canvas.width = SIZE;
-        canvas.height = SIZE;
-        let ctx = canvas.getContext('2d');
-        ctx.drawImage(imageElement, 0, 0, SIZE, SIZE);
-        
-        // Yield to UI before heavy computation
-        await new Promise(resolve => setTimeout(resolve, 0));
-        
-        const imageData = ctx.getImageData(0, 0, SIZE, SIZE);
+        const imageData = ctx.getImageData(0, 0, W, H);
         const data = imageData.data;
         
-        // Prepare tensor (1, 3, 1024, 1024) normalized: (x/255 - 0.5)
-        const input = new Float32Array(3 * SIZE * SIZE);
-        const totalPixels = SIZE * SIZE;
-        const chunkSize = 100000; // Process 100k pixels at a time
+        let alphaMask;
         
-        for (let start = 0; start < totalPixels; start += chunkSize) {
-            const end = Math.min(start + chunkSize, totalPixels);
-            for (let i = start; i < end; i++) {
-                input[i] = data[i * 4] / 255 - 0.5;              // R
-                input[SIZE * SIZE + i] = data[i * 4 + 1] / 255 - 0.5;  // G
-                input[2 * SIZE * SIZE + i] = data[i * 4 + 2] / 255 - 0.5;  // B
-            }
-            // Yield to UI every 100k pixels
-            if (end < totalPixels) {
-                await new Promise(resolve => setTimeout(resolve, 0));
+        // Try worker first (non-blocking - keeps UI responsive)
+        if (_workerReady && _worker) {
+            try {
+                console.log('[ClientAI] Running RMBG in worker (non-blocking)...');
+                const result = await postToWorker('runRMBG', {
+                    imageData: data,
+                    width: W,
+                    height: H
+                });
+                alphaMask = result.alphaMask;
+                console.log('[ClientAI] Worker RMBG completed!');
+            } catch (e) {
+                console.warn('[ClientAI] Worker RMBG failed, using main thread:', e.message);
+                alphaMask = null;
             }
         }
         
-        const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
-        
-        const inputName = _rmbgSession.inputNames[0];
-        
-        // Yield before inference (heaviest operation)
-        await new Promise(resolve => setTimeout(resolve, 0));
-        
-        const results = await _rmbgSession.run({ [inputName]: inputTensor });
-        
-        // Yield after inference
-        await new Promise(resolve => setTimeout(resolve, 0));
-        
-        // Get mask output
-        const outputName = _rmbgSession.outputNames[0];
-        const mask = results[outputName].data;
-        
-        // Normalize mask to 0-255
-        let min = Infinity, max = -Infinity;
-        for (let i = 0; i < mask.length; i++) {
-            if (mask[i] < min) min = mask[i];
-            if (mask[i] > max) max = mask[i];
-        }
-        const range = max - min || 1;
-        
-        // Yield before output processing
-        await new Promise(resolve => setTimeout(resolve, 0));
-        
-        // Create output at original size
-        const outCanvas = document.createElement('canvas');
-        outCanvas.width = W;
-        outCanvas.height = H;
-        const outCtx = outCanvas.getContext('2d');
-        outCtx.drawImage(imageElement, 0, 0, W, H);
-        
-        const outData = outCtx.getImageData(0, 0, W, H);
-        const outPixels = outData.data;
-        
-        // Resize mask from 1024x1024 to WxH with chunked processing
-        const rowsPerChunk = 50; // Process 50 rows at a time
-        for (let startY = 0; startY < H; startY += rowsPerChunk) {
-            const endY = Math.min(startY + rowsPerChunk, H);
+        // Fallback to main thread (will block UI)
+        if (!alphaMask) {
+            if (!_rmbgSession) throw new Error('RMBG not loaded');
+            console.log('[ClientAI] Running RMBG on main thread (may lag)...');
             
-            for (let y = startY; y < endY; y++) {
+            const SIZE = 1024;
+            const resizeCanvas = document.createElement('canvas');
+            resizeCanvas.width = SIZE;
+            resizeCanvas.height = SIZE;
+            const resizeCtx = resizeCanvas.getContext('2d');
+            resizeCtx.drawImage(imageElement, 0, 0, SIZE, SIZE);
+            
+            const resizedData = resizeCtx.getImageData(0, 0, SIZE, SIZE);
+            const pixels = resizedData.data;
+            
+            // Prepare tensor
+            const input = new Float32Array(3 * SIZE * SIZE);
+            for (let i = 0; i < SIZE * SIZE; i++) {
+                input[i] = pixels[i * 4] / 255 - 0.5;
+                input[SIZE * SIZE + i] = pixels[i * 4 + 1] / 255 - 0.5;
+                input[2 * SIZE * SIZE + i] = pixels[i * 4 + 2] / 255 - 0.5;
+            }
+            
+            const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
+            const inputName = _rmbgSession.inputNames[0];
+            
+            const results = await _rmbgSession.run({ [inputName]: inputTensor });
+            
+            const outputName = _rmbgSession.outputNames[0];
+            const mask = results[outputName].data;
+            
+            // Normalize and resize mask
+            let min = Infinity, max = -Infinity;
+            for (let i = 0; i < mask.length; i++) {
+                if (mask[i] < min) min = mask[i];
+                if (mask[i] > max) max = mask[i];
+            }
+            const range = max - min || 1;
+            
+            alphaMask = new Float32Array(W * H);
+            for (let y = 0; y < H; y++) {
                 for (let x = 0; x < W; x++) {
                     const srcX = Math.floor(x * SIZE / W);
                     const srcY = Math.floor(y * SIZE / H);
                     const srcIdx = srcY * SIZE + srcX;
-                    const alpha = ((mask[srcIdx] - min) / range) * 255;
-                    outPixels[(y * W + x) * 4 + 3] = Math.round(alpha);
+                    alphaMask[y * W + x] = (mask[srcIdx] - min) / range;
                 }
-            }
-            
-            // Yield to UI every 50 rows
-            if (endY < H) {
-                await new Promise(resolve => setTimeout(resolve, 0));
             }
         }
         
-        outCtx.putImageData(outData, 0, 0);
+        // Apply alpha to image
+        for (let i = 0; i < W * H; i++) {
+            data[i * 4 + 3] = Math.round(alphaMask[i] * 255);
+        }
         
-        // Yield before final conversion
-        await new Promise(resolve => setTimeout(resolve, 0));
-        
-        return outCanvas.toDataURL('image/png');
+        ctx.putImageData(imageData, 0, 0);
+        return canvas.toDataURL('image/png');
     }
 
     // ── Compatibility helpers for HTML init code ──────────────────────────
@@ -566,6 +606,9 @@ const ClientProcessor = (() => {
             if (_initPromise) return _initPromise;
             
             _initPromise = (async () => {
+                // Initialize web worker for non-blocking inference
+                await initWorker();
+                
                 await initFaceDetector();
                 
                 // Check what's already cached and load them
@@ -591,12 +634,25 @@ const ClientProcessor = (() => {
             _rvmDownloading = true;
             
             try {
-                _rvmSession = await loadONNXSession(MODELS.rvm.id, MODELS.rvm.url, onProgress);
+                // Download model (with caching)
+                const modelBuffer = await downloadModel(MODELS.rvm.id, MODELS.rvm.url, onProgress);
+                
+                // Load into worker if available (for non-blocking inference)
+                if (_workerReady && _worker) {
+                    await postToWorker('loadModel', { 
+                        modelType: 'rvm', 
+                        modelBuffer: modelBuffer 
+                    });
+                    console.log('[ClientAI] RVM loaded into worker');
+                }
+                
+                // Also load on main thread as fallback
+                _rvmSession = await createONNXSession(modelBuffer);
                 _rvmReady = true;
             } catch (e) {
                 console.error('[ClientAI] RVM load FAILED:', e.message);
                 console.error('[ClientAI] Full error:', e);
-                _rmbgReady = false;
+                _rvmReady = false;
             } finally {
                 _rvmDownloading = false;
             }
@@ -609,7 +665,8 @@ const ClientProcessor = (() => {
             console.log('[ClientAI] Starting RMBG-1.4 download (40MB)...');
             
             try {
-                _rmbgSession = await loadONNXSession(MODELS.rmbg.id, MODELS.rmbg.url, (progress) => {
+                // Download model (with caching and progress)
+                const modelBuffer = await downloadModel(MODELS.rmbg.id, MODELS.rmbg.url, (progress) => {
                     if (onProgress) onProgress(progress);
                     if (progress < 1) {
                         console.log(`[ClientAI] RMBG download: ${Math.round(progress*100)}%`);
@@ -617,6 +674,18 @@ const ClientProcessor = (() => {
                         console.log('[ClientAI] RMBG model downloaded!');
                     }
                 });
+                
+                // Load into worker if available (for non-blocking inference)
+                if (_workerReady && _worker) {
+                    await postToWorker('loadModel', { 
+                        modelType: 'rmbg', 
+                        modelBuffer: modelBuffer 
+                    });
+                    console.log('[ClientAI] RMBG loaded into worker');
+                }
+                
+                // Also load on main thread as fallback
+                _rmbgSession = await createONNXSession(modelBuffer);
                 _rmbgReady = true;
                 console.log('[ClientAI] RMBG ready! Objects will use on-device AI');
             } catch (e) {
