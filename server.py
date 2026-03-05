@@ -483,29 +483,30 @@ def upload_image():
             img_io.seek(0)
             image_bytes = img_io.read()
             
-            # Upload to R2 in background (fire-and-forget)
+            # Upload to R2 (synchronous for debugging)
             if s3_client and R2_BUCKET_NAME:
-                def r2_upload_background(img_bytes, r2_key):
-                    try:
-                        s3_client.put_object(
-                            Bucket=R2_BUCKET_NAME,
-                            Key=r2_key,
-                            Body=img_bytes,
-                            ContentType=mimetype
-                        )
-                        public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
-                        if public_domain:
-                            r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
-                        else:
-                            r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
-                        logger.info(f"R2 upload success: {r2_url}")
-                    except Exception as e:
-                        logger.error(f"R2 background upload error: {str(e)[:100]}")
-                
-                # Submit and forget - don't wait for result
-                r2_key = f"removed-bg-images/{unique_id}_{file.filename}"
-                executor.submit(r2_upload_background, image_bytes, r2_key)
-                logger.info(f"R2 upload started in background: {r2_key}")
+                try:
+                    r2_key = f"removed-bg-images/{unique_id}_{file.filename}"
+                    logger.info(f"Starting R2 upload: {r2_key} ({len(image_bytes)} bytes)")
+                    
+                    s3_client.put_object(
+                        Bucket=R2_BUCKET_NAME,
+                        Key=r2_key,
+                        Body=image_bytes,
+                        ContentType=mimetype
+                    )
+                    
+                    public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
+                    if public_domain:
+                        r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
+                    else:
+                        r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
+                    
+                    logger.info(f"R2 upload SUCCESS: {r2_url}")
+                except Exception as e:
+                    logger.error(f"R2 upload FAILED: {str(e)}")
+                    logger.error(f"R2 config - Endpoint: {R2_ENDPOINT}, Bucket: {R2_BUCKET_NAME}")
+                    # Don't fail the request, just log the error
             
             # Send response immediately (don't wait for R2)
             response_io = io.BytesIO(image_bytes)
