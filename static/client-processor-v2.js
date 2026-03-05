@@ -44,6 +44,8 @@ const ClientProcessor = (() => {
     // Web Worker for non-blocking inference
     let _worker = null;
     let _workerReady = false;
+    let _workerHasRVM = false;
+    let _workerHasRMBG = false;
     let _workerCallbacks = {};
     let _workerMessageId = 0;
     
@@ -423,7 +425,7 @@ const ClientProcessor = (() => {
         let alphaMask;
         
         // Try worker first (non-blocking)
-        if (_workerReady && _worker) {
+        if (_workerReady && _worker && _workerHasRVM) {
             try {
                 const result = await postToWorker('runRVM', {
                     imageData: data,
@@ -488,7 +490,7 @@ const ClientProcessor = (() => {
         let alphaMask;
         
         // Try worker first (non-blocking - keeps UI responsive)
-        if (_workerReady && _worker) {
+        if (_workerReady && _worker && _workerHasRMBG) {
             try {
                 console.log('[ClientAI] Running RMBG in worker (non-blocking)...');
                 const result = await postToWorker('runRMBG', {
@@ -647,6 +649,7 @@ const ClientProcessor = (() => {
                         });
                         console.log('[ClientAI] RVM loaded into worker (non-blocking mode)');
                         workerLoaded = true;
+                        _workerHasRVM = true;
                     } catch (workerErr) {
                         console.warn('[ClientAI] Worker RVM load failed:', workerErr.message);
                         _workerReady = false;
@@ -696,6 +699,7 @@ const ClientProcessor = (() => {
                         });
                         console.log('[ClientAI] RMBG loaded into worker (non-blocking mode)');
                         workerLoaded = true;
+                        _workerHasRMBG = true;
                     } catch (workerErr) {
                         console.warn('[ClientAI] Worker RMBG load failed:', workerErr.message);
                         _workerReady = false;
@@ -741,7 +745,7 @@ const ClientProcessor = (() => {
             
             if (mode === 'pro') {
                 // === PRO MODE: ALWAYS use RMBG-1.4 ===
-                if (_rmbgReady && _rmbgSession) {
+                if (_rmbgReady) {
                     try {
                         const result = await runRMBG(imageElement);
                         return { success: true, dataUrl: result, model: 'rmbg', isPerson, mode: 'pro' };
@@ -759,7 +763,7 @@ const ClientProcessor = (() => {
                 // === FAST MODE: Smart routing ===
                 if (isPerson) {
                     // Person detected → use RVM for speed
-                    if (_rvmReady && _rvmSession) {
+                    if (_rvmReady) {
                         try {
                             const downsample = 0.2; // Fast mode uses 0.2 downsample
                             const result = await runRVM(imageElement, downsample);
@@ -776,7 +780,7 @@ const ClientProcessor = (() => {
                     }
                 } else {
                     // Object detected → use RMBG
-                    if (_rmbgReady && _rmbgSession) {
+                    if (_rmbgReady) {
                         try {
                             const result = await runRMBG(imageElement);
                             return { success: true, dataUrl: result, model: 'rmbg', isPerson: false, mode: 'fast' };
