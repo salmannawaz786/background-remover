@@ -352,14 +352,20 @@ const ClientProcessor = (() => {
         }
         
         try {
+            // Disable multi-threading to avoid cross-origin isolation requirement
             const session = await ort.InferenceSession.create(arrayBuffer, {
                 executionProviders: ['wasm'],
-                graphOptimizationLevel: 'all'
+                graphOptimizationLevel: 'all',
+                executionProviderOptions: {
+                    wasm: {
+                        numThreads: 1  // Single thread to avoid cross-origin issues
+                    }
+                }
             });
             
             return session;
         } catch (error) {
-            // Session creation failed
+            console.error('[ONNX] Session creation failed:', error);
             throw error;
         }
     }
@@ -551,7 +557,9 @@ const ClientProcessor = (() => {
                 _rvmSession = await loadONNXSession(MODELS.rvm.id, MODELS.rvm.url, onProgress);
                 _rvmReady = true;
             } catch (e) {
-                // RVM load failed
+                console.error('[ClientAI] RVM load FAILED:', e.message);
+                console.error('[ClientAI] Full error:', e);
+                _rmbgReady = false;
             } finally {
                 _rvmDownloading = false;
             }
@@ -561,11 +569,23 @@ const ClientProcessor = (() => {
             if (_rmbgReady || _rmbgDownloading) return;
             _rmbgDownloading = true;
             
+            console.log('[ClientAI] Starting RMBG-1.4 download (40MB)...');
+            
             try {
-                _rmbgSession = await loadONNXSession(MODELS.rmbg.id, MODELS.rmbg.url, onProgress);
+                _rmbgSession = await loadONNXSession(MODELS.rmbg.id, MODELS.rmbg.url, (progress) => {
+                    if (onProgress) onProgress(progress);
+                    if (progress < 1) {
+                        console.log(`[ClientAI] RMBG download: ${Math.round(progress*100)}%`);
+                    } else {
+                        console.log('[ClientAI] RMBG model downloaded!');
+                    }
+                });
                 _rmbgReady = true;
+                console.log('[ClientAI] RMBG ready! Objects will use on-device AI');
             } catch (e) {
-                // RMBG load failed
+                console.error('[ClientAI] RMBG load FAILED:', e.message);
+                console.error('[ClientAI] Full error:', e);
+                _rmbgReady = false;
             } finally {
                 _rmbgDownloading = false;
             }
