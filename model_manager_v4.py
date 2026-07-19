@@ -1,9 +1,13 @@
 """
 Background Remover v4 - Smart Model Routing
 ============================================
-Uses face detection to route:
-  - Persons → RVM (Robust Video Matting) - fast=0.2, pro=0.5 downsample
-  - Objects → RMBG-1.4 (general segmentation)
+Fast mode:
+  - Persons → RVM (Robust Video Matting)
+  - Objects → U2Net-P (4MB lightweight)
+Pro mode:
+  - Server fallback → BREFNet Lite ONNX (model_fp16.onnx, 98MB)
+  - Client-side (PC) → BREFNet Lite ONNX
+  - Client-side (Mobile) → RMBG-1.4
 
 Models are singletons - loaded once, stay in memory.
 """
@@ -20,15 +24,16 @@ logger = logging.getLogger(__name__)
 
 # ── Singleton state ──────────────────────────────────────────────────────────
 _rvm_session = None
-_rmbg_session = None
-_face_cascade = None
+_u2netp_session = None
+_brefnet_session = None
 _rvm_lock = threading.Lock()
-_rmbg_lock = threading.Lock()
+_u2netp_lock = threading.Lock()
+_brefnet_lock = threading.Lock()
 _face_lock = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ── Model URLs and paths ─────────────────────────────────────────────────────
+# ── Model paths ──────────────────────────────────────────────────────────────
 RVM_CONFIG = {
     'name': 'RVM (Robust Video Matting)',
     'url': 'https://huggingface.co/eafish/web-onnx/resolve/main/rvm_mobilenetv3_fp32.onnx',
@@ -36,19 +41,34 @@ RVM_CONFIG = {
     'size_mb': 15,
 }
 
-RMBG_CONFIG = {
-    'name': 'RMBG-1.4',
-    'url': 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx',
-    'file': os.path.join(BASE_DIR, 'rmbg14.onnx'),
-    'size_mb': 40,
-    'input_size': 1024,
+U2NETP_CONFIG = {
+    'name': 'U2Net-P (fast objects)',
+    'file': os.path.join(BASE_DIR, '.onnx_cache', 'opt_u2netp.onnx'),
+    'input_size': 320,
+    'input_name': 'input.1',
+    'output_index': 0,
+    'size_mb': 4,
 }
 
-# ── Multi-Stage Person Detection (Face + Upper Body) ───────────────────────
+BREFNET_CONFIG = {
+    'name': 'BREFNet Lite ONNX (pro)',
+    'file': os.path.join(BASE_DIR, 'model_fp16.onnx'),
+    'input_name': 'input_image',
+    'output_name': 'output_image',
+    'input_size': 512,
+    'size_mb': 98,
+}
+
+# ImageNet normalization constants
+_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+# ── Multi-Stage Person Detection ─────────────────────────────────────────────
 
 _face_cascade = None
 _upperbody_cascade = None
 _fullbody_cascade = None
+
 
 def _get_face_cascade():
     global _face_cascade
@@ -61,6 +81,7 @@ def _get_face_cascade():
         logger.info("Face detection cascade loaded")
     return _face_cascade
 
+
 def _get_upperbody_cascade():
     global _upperbody_cascade
     if _upperbody_cascade is not None:
@@ -71,6 +92,7 @@ def _get_upperbody_cascade():
         _upperbody_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
         logger.info("Upper body detection cascade loaded")
     return _upperbody_cascade
+
 
 def _get_fullbody_cascade():
     global _fullbody_cascade
@@ -85,89 +107,44 @@ def _get_fullbody_cascade():
 
 
 def detect_person(image: Image.Image) -> bool:
-    """
-    Multi-stage person detection to determine if image contains a person.
-    Uses face, upper body, and full body detection for high accuracy.
-    
-    Detection happens BEFORE any model processing.
-    Returns True only if person detected with high confidence.
-    """
+    """Multi-stage person detection using Haar cascades."""
     t0 = time.time()
-    
-    # Convert to grayscale numpy array
     img_np = np.array(image.convert('RGB'))
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    
-    # Resize to max 400px for better detection accuracy
+
     h, w = gray.shape
-    max_size = 400
+    max_size = 600
     scale = min(max_size / max(h, w), 1.0)
     if scale < 1.0:
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-    
-    # Stage 1: Face Detection (most accurate)
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR)
+
     face_cascade = _get_face_cascade()
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.08,  # Very fine steps = highest accuracy
-        minNeighbors=6,    # Very strict = fewer false positives
-        minSize=(40, 40),  # Ignore very small faces
-        flags=cv2.CASCADE_SCALE_IMAGE
-    )
-    
-    # If face found, definitely a person
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(24, 24), flags=cv2.CASCADE_SCALE_IMAGE)
     if len(faces) > 0:
-        elapsed = time.time() - t0
-        logger.info(f"✓ PERSON detected: {len(faces)} face(s) found ({elapsed:.3f}s)")
+        logger.info(f"[OK] PERSON detected: {len(faces)} face(s) ({time.time()-t0:.3f}s)")
         return True
-    
-    # Stage 2: Upper Body Detection (for no face visible)
+
     upperbody_cascade = _get_upperbody_cascade()
-    upperbodies = upperbody_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=4,
-        minSize=(60, 60),
-        flags=cv2.CASCADE_SCALE_IMAGE
-    )
-    
-    # If upper body found, likely a person
+    upperbodies = upperbody_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(40, 40), flags=cv2.CASCADE_SCALE_IMAGE)
     if len(upperbodies) > 0:
-        elapsed = time.time() - t0
-        logger.info(f"✓ PERSON detected: {len(upperbodies)} upper body(ies) found ({elapsed:.3f}s)")
+        logger.info(f"[OK] PERSON detected: {len(upperbodies)} upper body(ies) ({time.time()-t0:.3f}s)")
         return True
-    
-    # Stage 3: Full Body Detection (for full person shots)
+
     fullbody_cascade = _get_fullbody_cascade()
-    fullbodies = fullbody_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=3,
-        minSize=(80, 80),
-        flags=cv2.CASCADE_SCALE_IMAGE
-    )
-    
-    # If full body found, definitely a person
+    fullbodies = fullbody_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=2, minSize=(60, 60), flags=cv2.CASCADE_SCALE_IMAGE)
     if len(fullbodies) > 0:
-        elapsed = time.time() - t0
-        logger.info(f"✓ PERSON detected: {len(fullbodies)} full body(ies) found ({elapsed:.3f}s)")
+        logger.info(f"[OK] PERSON detected: {len(fullbodies)} full body(ies) ({time.time()-t0:.3f}s)")
         return True
-    
-    # No person detected
-    elapsed = time.time() - t0
-    logger.info(f"✗ OBJECT detected: No person features found ({elapsed:.3f}s)")
+
+    logger.info(f"[NO] OBJECT detected ({time.time()-t0:.3f}s)")
     return False
 
 
 # ── Download helper ──────────────────────────────────────────────────────────
 
 def _download_model(url: str, path: str, name: str):
-    """Download model file if not exists"""
     if os.path.exists(path):
         return True
-    
     import urllib.request
     logger.info(f"Downloading {name} from {url}...")
     try:
@@ -188,17 +165,15 @@ def _get_rvm_session():
     with _rvm_lock:
         if _rvm_session is not None:
             return _rvm_session
-        
-        # Download if needed
         if not _download_model(RVM_CONFIG['url'], RVM_CONFIG['file'], 'RVM'):
             raise RuntimeError("Failed to download RVM model")
-        
         import onnxruntime as ort
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        opts.intra_op_num_threads = 4
+        # 2 (not 4): the server runs real concurrent lanes now, so each session
+        # must leave room for other sessions running on the same 2-core box.
+        opts.intra_op_num_threads = 2
         opts.inter_op_num_threads = 1
-        
         t0 = time.time()
         session = ort.InferenceSession(RVM_CONFIG['file'], sess_options=opts, providers=['CPUExecutionProvider'])
         logger.info(f"RVM loaded in {time.time()-t0:.2f}s")
@@ -206,96 +181,162 @@ def _get_rvm_session():
     return _rvm_session
 
 
-def run_rvm(image: Image.Image, downsample_ratio: float = 0.5) -> Image.Image:
-    """
-    Run RVM (Robust Video Matting) for person segmentation.
-    downsample_ratio: 0.2 = fast, 0.5 = pro quality
-    """
+def _refine_mask(mask: np.ndarray) -> np.ndarray:
+    """Post-process alpha mask: remove specks, fill holes, feather edges."""
+    mask = np.ascontiguousarray(mask)
+    inv = 255 - mask
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
+    if num_labels > 1:
+        h, w = mask.shape
+        min_area = max(40, int(0.0005 * h * w))
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] < min_area:
+                mask[labels == i] = 255
+    close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_k, iterations=1)
+    mask = cv2.GaussianBlur(mask, (3, 3), 0)
+    mask = np.clip(mask, 0, 255).astype(np.uint8)
+    return mask
+
+
+def run_rvm(image: Image.Image, downsample_ratio: float = 1.0) -> Image.Image:
+    """Run RVM for person segmentation at 512px."""
     session = _get_rvm_session()
     W, H = image.size
-    
-    # Prepare inputs
-    src = np.array(image.convert("RGB"), dtype=np.float32) / 255.0
-    src = src.transpose(2, 0, 1)[np.newaxis, ...]  # (1, 3, H, W)
-    
-    # RVM recurrent states (zeros for single image)
-    r = np.zeros((1, 1, 1, 1), dtype=np.float32)
-    dsr = np.array([downsample_ratio], dtype=np.float32)
-    
+    target_size = 512
+    pil_proc = image.convert("RGB").resize((target_size, target_size), Image.BILINEAR)
+    arr = np.array(pil_proc, dtype=np.float32) / 255.0
+    src = (arr - _MEAN) / _STD
+    src = src.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
+
+    r1i = np.zeros((1, 16, target_size // 2, target_size // 2), dtype=np.float32)
+    r2i = np.zeros((1, 20, target_size // 4, target_size // 4), dtype=np.float32)
+    r3i = np.zeros((1, 40, target_size // 8, target_size // 8), dtype=np.float32)
+    r4i = np.zeros((1, 64, target_size // 16, target_size // 16), dtype=np.float32)
+    dsr = np.array([1.0], dtype=np.float32)
+
     t0 = time.time()
-    outputs = session.run(None, {
-        "src": src,
-        "r1i": r, "r2i": r, "r3i": r, "r4i": r,
-        "downsample_ratio": dsr
-    })
-    
-    # Output: fgr (foreground), pha (alpha)
-    pha = outputs[1]  # Alpha channel
-    logger.info(f"RVM inference ({downsample_ratio}): {time.time()-t0:.2f}s")
-    
-    # Extract mask and resize
-    mask = (pha[0, 0] * 255).clip(0, 255).astype(np.uint8)
-    mask = Image.fromarray(mask).resize((W, H), Image.BILINEAR)
-    
+    outputs = session.run(None, {"src": src, "r1i": r1i, "r2i": r2i, "r3i": r3i, "r4i": r4i, "downsample_ratio": dsr})
+    pha = outputs[1]
+    logger.info(f"RVM inference ({target_size}x{target_size}): {time.time()-t0:.2f}s")
+
+    mask = pha[0, 0]
+    mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
+    mask = (mask * 255).clip(0, 255).astype(np.uint8)
+    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_CUBIC)
+
     result = image.convert("RGBA")
-    result.putalpha(mask)
+    result.putalpha(Image.fromarray(mask, "L"))
     return result
 
 
-# ── RMBG-1.4 Model (General Objects) ─────────────────────────────────────────
+# ── U2Net-P Model (Fast Object Segmentation, 4MB) ───────────────────────────
 
-def _get_rmbg_session():
-    global _rmbg_session
-    if _rmbg_session is not None:
-        return _rmbg_session
-    with _rmbg_lock:
-        if _rmbg_session is not None:
-            return _rmbg_session
-        
-        # Download if needed
-        if not _download_model(RMBG_CONFIG['url'], RMBG_CONFIG['file'], 'RMBG-1.4'):
-            raise RuntimeError("Failed to download RMBG-1.4 model")
-        
+def _get_u2netp_session():
+    global _u2netp_session
+    if _u2netp_session is not None:
+        return _u2netp_session
+    with _u2netp_lock:
+        if _u2netp_session is not None:
+            return _u2netp_session
         import onnxruntime as ort
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        opts.intra_op_num_threads = 4
+        opts.intra_op_num_threads = 2
         opts.inter_op_num_threads = 1
-        
         t0 = time.time()
-        session = ort.InferenceSession(RMBG_CONFIG['file'], sess_options=opts, providers=['CPUExecutionProvider'])
-        logger.info(f"RMBG-1.4 loaded in {time.time()-t0:.2f}s")
-        _rmbg_session = session
-    return _rmbg_session
+        session = ort.InferenceSession(U2NETP_CONFIG['file'], sess_options=opts, providers=['CPUExecutionProvider'])
+        logger.info(f"U2Net-P loaded in {time.time()-t0:.2f}s")
+        _u2netp_session = session
+    return _u2netp_session
 
 
-def run_rmbg(image: Image.Image) -> Image.Image:
-    """
-    Run RMBG-1.4 for general object segmentation.
-    Works on everything: products, animals, objects, etc.
-    """
-    session = _get_rmbg_session()
+def run_u2netp(image: Image.Image) -> Image.Image:
+    """Run U2Net-P (4MB) for fast object segmentation at 320px."""
+    session = _get_u2netp_session()
     W, H = image.size
-    size = RMBG_CONFIG['input_size']
-    
-    # Preprocess
-    x = image.convert("RGB").resize((size, size), Image.BILINEAR)
-    x = np.array(x, dtype=np.float32) / 255.0
-    x = (x - 0.5)  # RMBG normalization
-    x = x.transpose(2, 0, 1)[np.newaxis, ...]
-    
+    size = U2NETP_CONFIG['input_size']
+
+    img = np.array(image.convert('RGB').resize((size, size), Image.BILINEAR), dtype=np.float32)
+    img = img / 255.0
+    tensor = np.ascontiguousarray(img.transpose(2, 0, 1)[np.newaxis])
+
     t0 = time.time()
-    out = session.run(None, {session.get_inputs()[0].name: x})[0]
-    logger.info(f"RMBG inference: {time.time()-t0:.2f}s")
-    
-    # Extract and normalize mask
-    mask = out[0, 0]
-    mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
-    mask = (mask * 255).clip(0, 255).astype(np.uint8)
-    mask = Image.fromarray(mask).resize((W, H), Image.BILINEAR)
-    
+    outputs = session.run(None, {U2NETP_CONFIG['input_name']: tensor})
+    raw = outputs[U2NETP_CONFIG['output_index']]
+    logger.info(f"U2Net-P inference ({size}x{size}): {time.time()-t0:.2f}s")
+
+    if len(raw.shape) == 4:
+        mask = raw[0, 0]
+    elif len(raw.shape) == 3:
+        mask = raw[0]
+    else:
+        mask = raw
+
+    mask = mask.astype(np.float32)
+    mn, mx = mask.min(), mask.max()
+    if mx - mn > 1e-6:
+        mask = (mask - mn) / (mx - mn)
+    else:
+        mask = np.zeros_like(mask)
+
+    alpha = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+    alpha = cv2.resize(alpha, (W, H), interpolation=cv2.INTER_CUBIC)
+    alpha = _refine_mask(alpha)
+
     result = image.convert("RGBA")
-    result.putalpha(mask)
+    result.putalpha(Image.fromarray(alpha, "L"))
+    return result
+
+
+# ── BREFNet Lite ONNX (Pro Quality, 98MB) ───────────────────────────────────
+
+def _get_brefnet_session():
+    global _brefnet_session
+    if _brefnet_session is not None:
+        return _brefnet_session
+    with _brefnet_lock:
+        if _brefnet_session is not None:
+            return _brefnet_session
+        if not os.path.exists(BREFNET_CONFIG['file']):
+            raise RuntimeError(f"BREFNet model not found: {BREFNET_CONFIG['file']}")
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # 2 (not 4): the server runs real concurrent lanes now, so each session
+        # must leave room for other sessions running on the same 2-core box.
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        t0 = time.time()
+        session = ort.InferenceSession(BREFNET_CONFIG['file'], sess_options=opts, providers=['CPUExecutionProvider'])
+        logger.info(f"BREFNet Lite ONNX loaded in {time.time()-t0:.2f}s")
+        _brefnet_session = session
+    return _brefnet_session
+
+
+def run_brefnet(image: Image.Image) -> Image.Image:
+    """Run BREFNet Lite ONNX (512px) for pro-quality segmentation."""
+    session = _get_brefnet_session()
+    W, H = image.size
+    size = BREFNET_CONFIG['input_size']
+
+    img = np.array(image.convert('RGB').resize((size, size), Image.BILINEAR), dtype=np.float32)
+    img = img / 255.0
+    img = (img - _MEAN) / _STD
+    tensor = img.transpose(2, 0, 1)[np.newaxis].astype(np.float32)
+
+    t0 = time.time()
+    out = session.run(None, {BREFNET_CONFIG['input_name']: tensor})[0]
+    logger.info(f"BREFNet inference ({size}x{size}): {time.time()-t0:.2f}s")
+
+    mask = out[0, 0]
+    mask = 1.0 / (1.0 + np.exp(-mask.astype(np.float32)))
+    mask = (mask * 255).clip(0, 255).astype(np.uint8)
+    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_CUBIC)
+    mask = _refine_mask(mask)
+
+    result = image.convert("RGBA")
+    result.putalpha(Image.fromarray(mask, "L"))
     return result
 
 
@@ -304,70 +345,65 @@ def run_rmbg(image: Image.Image) -> Image.Image:
 class BackgroundRemoverV4:
     """
     Smart background remover with automatic person/object detection.
-    
-    Modes:
-      - fast: RVM 0.2 (persons) or RMBG 1.4 (objects)
-      - pro:  RVM 0.5 (persons) or RMBG 1.4 (objects)
+
+    Fast mode:
+      - Person → RVM (persons)
+      - Object → U2Net-P (4MB, fast)
+    Pro mode (server fallback):
+      - All images → BREFNet Lite ONNX (98MB, high quality)
     """
-    
+
     def get_available_models(self):
         rvm_size = os.path.getsize(RVM_CONFIG['file']) / (1024*1024) if os.path.exists(RVM_CONFIG['file']) else RVM_CONFIG['size_mb']
-        rmbg_size = os.path.getsize(RMBG_CONFIG['file']) / (1024*1024) if os.path.exists(RMBG_CONFIG['file']) else RMBG_CONFIG['size_mb']
+        u2netp_size = os.path.getsize(U2NETP_CONFIG['file']) / (1024*1024) if os.path.exists(U2NETP_CONFIG['file']) else U2NETP_CONFIG['size_mb']
+        brefnet_size = os.path.getsize(BREFNET_CONFIG['file']) / (1024*1024) if os.path.exists(BREFNET_CONFIG['file']) else BREFNET_CONFIG['size_mb']
         return {
-            'fast': {'name': 'Smart Fast', 'size_mb': rvm_size, 'description': 'RVM 0.2 (persons) / RMBG (objects)'},
-            'pro':  {'name': 'Smart Pro',  'size_mb': rmbg_size, 'description': 'RMBG-1.4 (all images)'},
+            'fast': {'name': 'Smart Fast', 'size_mb': rvm_size + u2netp_size, 'description': 'RVM (persons) / U2Net-P (objects)'},
+            'pro':  {'name': 'Smart Pro',  'size_mb': brefnet_size, 'description': 'BREFNet Lite (all images)'},
         }
-    
+
     def remove_background(self, image: Image.Image, mode: str = 'fast') -> Image.Image:
         """
         Remove background with automatic model selection.
-        
+
         Fast mode:
-           - Person → RVM 0.2 (fast, lightweight)
-           - Object → RMBG-1.4 (accurate)
-        
+           - Person → RVM (sharp, fast)
+           - Object → U2Net-P (4MB, lightweight)
         Pro mode:
-           - All images → RMBG-1.4 (highest quality)
+           - All images → BREFNet Lite ONNX (highest quality)
         """
         t0 = time.time()
-        
-        # Pro mode: Always use RMBG-1.4 for best quality
+
         if mode == 'pro':
-            result = run_rmbg(image)
-            model_used = "RMBG-1.4"
+            result = run_brefnet(image)
+            model_used = "BREFNet Lite"
         else:
-            # Fast mode: Detect person vs object
             is_person = detect_person(image)
-            
             if is_person:
-                # Use RVM for persons (fast)
-                result = run_rvm(image, downsample_ratio=0.2)
-                model_used = "RVM (0.2)"
+                result = run_rvm(image)
+                model_used = "RVM"
             else:
-                # Use RMBG for objects
-                result = run_rmbg(image)
-                model_used = "RMBG-1.4"
-        
+                result = run_u2netp(image)
+                model_used = "U2Net-P"
+
         logger.info(f"[{mode}] {model_used} -> total: {time.time()-t0:.2f}s")
         return result
-    
+
     def remove_background_forced(self, image: Image.Image, model: str, mode: str = 'fast') -> Image.Image:
-        """
-        Force a specific model (bypass auto-detection).
-        model: 'rvm' or 'rmbg'
-        """
+        """Force a specific model: 'rvm', 'u2netp', or 'brefnet'."""
         t0 = time.time()
         if model == 'rvm':
-            downsample = 0.2 if mode == 'fast' else 0.5
-            result = run_rvm(image, downsample_ratio=downsample)
+            result = run_rvm(image)
+        elif model == 'brefnet':
+            result = run_brefnet(image)
         else:
-            result = run_rmbg(image)
-        logger.info(f"[{mode}] Forced {model} → {time.time()-t0:.2f}s")
+            result = run_u2netp(image)
+        logger.info(f"[{mode}] Forced {model} -> {time.time()-t0:.2f}s")
         return result
-    
+
     def clear_cache(self):
         gc.collect()
-    
+
     def preload_rvm(self):
         """Pre-load RVM in background thread"""
         def _load():
@@ -377,14 +413,24 @@ class BackgroundRemoverV4:
                 logger.error(f"RVM preload failed: {e}")
         t = threading.Thread(target=_load, daemon=True)
         t.start()
-    
-    def preload_rmbg(self):
-        """Pre-load RMBG in background thread"""
+
+    def preload_u2netp(self):
+        """Pre-load U2Net-P in background thread"""
         def _load():
             try:
-                _get_rmbg_session()
+                _get_u2netp_session()
             except Exception as e:
-                logger.error(f"RMBG preload failed: {e}")
+                logger.error(f"U2Net-P preload failed: {e}")
+        t = threading.Thread(target=_load, daemon=True)
+        t.start()
+
+    def preload_brefnet(self):
+        """Pre-load BREFNet in background thread"""
+        def _load():
+            try:
+                _get_brefnet_session()
+            except Exception as e:
+                logger.error(f"BREFNet preload failed: {e}")
         t = threading.Thread(target=_load, daemon=True)
         t.start()
 

@@ -57,6 +57,10 @@ static/backup/
 
 # Node modules (if using npm)
 node_modules/
+.next/
+.venv/
+.onnx_cache/
+details.txt
 
 # Documentation files (keep only README.md)
 DEPLOYMENT_GUIDE.md
@@ -68,3 +72,4 @@ models.py
 
 # Untitled files
 Untitled-*.txt
+.vercel

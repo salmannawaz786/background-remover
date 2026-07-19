@@ -1,0 +1,33 @@
+/* Sweep to top hover effect */
+.btn-sweep-top {
+  position: relative;
+  overflow: hidden;
+  transition: color 0.3s;
+}
+
+.btn-sweep-top::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  background: linear-gradient(to top, #eab308, #facc15);
+  transform: scaleY(0);
+  transform-origin: bottom;
+  transition: transform 0.3s ease-out;
+}
+
+.btn-sweep-top:hover {
+  color: white;
+}
+
+.btn-sweep-top:hover::before {
+  transform: scaleY(1);
+}
+
+.btn-sweep-top > * {
+  position: relative;
+  z-index: 1;
+}

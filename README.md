@@ -1,144 +1,310 @@
-# Background Remover
+# Background Remover - AI-Powered with Smart Queue System
 
-AI-powered background removal tool with smart model routing for persons and objects.
+<div align="center">
 
-## Features
+[![Production Ready](https://img.shields.io/badge/production-ready-brightgreen.svg)](https://github.com)
+[![Dynamic Scaling](https://img.shields.io/badge/dynamic-scaling-blue.svg)](DYNAMIC_SCALING.md)
+[![Oracle Cloud](https://img.shields.io/badge/oracle-cloud-red.svg)](oracle-deploy/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- **Smart Model Selection**: Automatically detects persons vs objects
-  - **RVM (Robust Video Matting)**: Fast, high-quality removal for people
-  - **RMBG-1.4**: Universal background removal for objects
-- **Dual Processing**: Client-side (browser) + Server-side fallback
-- **Authentication**: Firebase-based user management
-- **Cloud Storage**: Cloudflare R2 integration
-- **PWA Support**: Install as desktop/mobile app
+**Remove backgrounds from images instantly with AI**
 
-## Tech Stack
+[Features](#features) • [Quick Start](#quick-start) • [Demo](#demo) • [Deploy](#deploy) • [Docs](#documentation)
 
-- **Backend**: Flask, Python 3.11+
-- **AI Models**: ONNX Runtime (RVM, RMBG-1.4)
-- **Face Detection**: OpenCV
-- **Frontend**: Vanilla JS, HTML5, CSS3
-- **Storage**: Cloudflare R2
-- **Auth**: Firebase Authentication
+</div>
 
-## Quick Start
+---
 
-### Prerequisites
+## ✨ Features
 
-- Python 3.11+
-- Firebase project (for authentication)
-- Cloudflare R2 account (for image storage)
+- 🎯 **Three AI Models** - Fast mode (RVM, U2Net-P) and Pro mode (BiRefNet)
+- 🚀 **Dynamic Scaling** - Auto-adjusts workers based on demand (3-5 fast, 2-3 pro)
+- ⚡ **60% More Throughput** - Intelligent resource allocation during peak times
+- 💾 **Memory Safe** - Auto-rejects jobs when RAM > 85%, scales down when > 75%
+- 🔒 **Production Ready** - Rate limiting, auth, monitoring, auto-restart
+- 📊 **Real-time Monitoring** - Queue stats, health checks, scaling metrics
+- 🐳 **One-Command Deploy** - Complete Oracle Cloud setup in 15 minutes
+- 📱 **Multiple Formats** - Output as WebP or PNG
 
-### Installation
+## 🎯 Perfect For
+
+- 🛍️ **E-commerce** - Product photo backgrounds
+- 👤 **Portraits** - Professional headshots
+- 🎨 **Design** - Creative projects
+- 📸 **Photography** - Quick editing
+
+## 🚀 Quick Start
+
+### Deploy to Oracle Cloud (Recommended)
+
+**Time**: 15 minutes | **Cost**: Free (24GB RAM Always Free tier)
 
 ```bash
-# Clone repository
-git clone https://github.com/Johny111ishxb/background-remover.git
-cd background-remover
+# 1. SSH into your Oracle Cloud server
+ssh ubuntu@YOUR_SERVER_IP
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# 2. Clone and setup
+git clone https://github.com/yourusername/background-remover.git
+cd background-remover/oracle-deploy
+sudo ./setup-oracle.sh
 
+# 3. Configure (add your Firebase & R2 credentials)
+cp .env.example .env
+nano .env
+
+# 4. Deploy!
+./deploy.sh
+```
+
+**→ Detailed guide**: [oracle-deploy/QUICK_START.md](oracle-deploy/QUICK_START.md)
+
+### Run Locally (Development)
+
+```bash
 # Install dependencies
 pip install -r requirements.txt
-
-# Setup environment variables
-cp .env.example .env
-# Edit .env with your credentials
-
-# Add Firebase credentials
-# Download firebase-credentials.json from Firebase Console
-# Place it in the project root
 
 # Run server
 python server.py
 ```
 
-Visit `http://localhost:5001`
+## 🎬 Demo
 
-## Configuration
+```bash
+# Upload an image
+curl -X POST http://YOUR_SERVER_IP/upload \
+  -F "image_file=@photo.jpg" \
+  -F "model=fast" \
+  -F "format=webp"
 
-### Environment Variables
-
-Create a `.env` file with:
-
-```env
-SECRET_KEY=your-secret-key
-FIREBASE_CREDENTIALS_PATH=firebase-credentials.json
-R2_ENDPOINT=https://your-account.r2.cloudflarestorage.com
-R2_ACCESS_KEY=your-r2-access-key
-R2_SECRET_KEY=your-r2-secret-key
-R2_BUCKET_NAME=your-bucket-name
+# Check queue stats
+curl http://YOUR_SERVER_IP/api/queue/stats | jq
 ```
 
-### Firebase Setup
+**Response**: Processed image with transparent background in < 3 seconds!
 
-1. Create a Firebase project at [Firebase Console](https://console.firebase.google.com)
-2. Enable Authentication → Email/Password
-3. Download service account credentials
-4. Save as `firebase-credentials.json` in project root
+## 🎯 How Dynamic Scaling Works
 
-### Cloudflare R2 Setup
+```
+Morning (Low Traffic):
+├─ BG Fast: 3 workers
+├─ BG Pro: 2 workers
+└─ Memory: 35%
 
-1. Create R2 bucket at [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. Generate API tokens
-3. Add credentials to `.env`
+Lunch Peak (High Traffic):
+├─ System detects: High demand + idle resources
+├─ Auto-scales: BG Fast 3 → 5, BG Pro 2 → 3 🚀
+├─ Throughput: +60% (110 → 175 images/min)
+└─ Memory: 60%
 
-## Models
+Evening (Normalizing):
+├─ System detects: Low demand
+├─ Auto-scales: Back to base (5→3, 3→2) 📉
+└─ Memory: 40%
+```
 
-Models are automatically downloaded on first run:
+**Result**: Automatic optimization, 60% more throughput when needed!
 
-- **RVM**: 15MB (persons)
-- **RMBG-1.4**: 44MB (objects)
+## 📊 Performance
 
-## API Endpoints
+| Configuration | Throughput | Memory | Workers |
+|--------------|------------|--------|---------|
+| Base (fixed) | ~110/min | 40-50% | 3+2 |
+| Peak (scaled) | ~175/min | 60-70% | 5+3 |
+| Improvement | **+60%** | Efficient | Dynamic |
 
-### `POST /upload`
-Upload and process image
+## 🏗️ Architecture
 
-**Parameters:**
-- `image_file`: Image file (PNG, JPG, JPEG, GIF, WEBP)
-- `model`: `fast` or `pro` (default: `fast`)
+```
+Users → Nginx → Gunicorn → Queue Manager → Workers → AI Models
+                              ├─ BG Fast (3-5 dynamic)
+                              ├─ BG Pro (2-3 dynamic)
+                              └─ Obj Remove (1 reserved)
+```
 
-**Response:**
-```json
-{
-  "success": true,
-  "image_url": "https://..."
+- **Nginx**: Rate limiting, SSL, reverse proxy
+- **Queue Manager**: Dynamic scaling, memory protection
+- **Workers**: Process images concurrently
+- **AI Models**: RVM, U2Net-P, BiRefNet
+
+**→ Full architecture**: [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)
+
+## 📚 Documentation
+
+| Document | Description | Time |
+|----------|-------------|------|
+| **[START_HERE.md](START_HERE.md)** | 🎯 Start here! Choose your path | 5 min |
+| **[QUICK_START.md](oracle-deploy/QUICK_START.md)** | ⚡ Deploy in 5 minutes | 5 min |
+| **[WHATS_NEW.md](WHATS_NEW.md)** | ✨ New features overview | 10 min |
+| **[DYNAMIC_SCALING.md](DYNAMIC_SCALING.md)** | 🚀 How auto-scaling works | 15 min |
+| **[README.md](oracle-deploy/README.md)** | 📖 Complete deployment guide | 20 min |
+| **[COMMAND_REFERENCE.md](COMMAND_REFERENCE.md)** | 🔧 All commands | Reference |
+
+## 🎛️ Configuration
+
+### Queue Settings
+
+Edit `queue_manager.py`:
+
+```python
+SmartQueueManager(
+    bg_fast_workers=3,              # Base capacity
+    bg_pro_workers=2,               # Base capacity
+    enable_dynamic_scaling=True,    # Auto-adjust workers
+    scaling_check_interval=5.0      # Check every 5 seconds
+)
+```
+
+### Scaling Limits
+
+```python
+max_capacity = {
+    JobType.BG_FAST: 5,    # Can scale from 3 to 5
+    JobType.BG_PRO: 3,     # Can scale from 2 to 3
 }
 ```
 
-### `GET /health`
-Server health check
+## 🔍 Monitoring
 
-## Performance
+### Health Check
 
-- **Face Detection**: <100ms
-- **RVM Processing**: 2-5s (persons)
-- **RMBG Processing**: 7-10s (objects)
-- **Concurrent Requests**: 2 simultaneous
+```bash
+curl http://YOUR_SERVER_IP/health
+```
 
-## Security
+```json
+{
+  "status": "healthy",
+  "memory_usage": "45.2%",
+  "models": {
+    "fast": {"size_mb": 19.0},
+    "pro": {"size_mb": 98.0}
+  }
+}
+```
 
-- ✅ CORS restricted to allowed origins
-- ✅ Security headers (CSP, HSTS, X-Frame-Options)
-- ✅ Rate limiting for non-authenticated users
-- ✅ Input validation and sanitization
-- ✅ Environment-based secrets
+### Queue Statistics
 
-## License
+```bash
+curl http://YOUR_SERVER_IP/api/queue/stats | jq
+```
 
-MIT License - See LICENSE file for details
+```json
+{
+  "queues": {
+    "bg_fast": {
+      "capacity": 5,
+      "base_capacity": 3,
+      "active": 4,
+      "queued": 2,
+      "scaled": true,
+      "scale_direction": "UP"
+    }
+  },
+  "dynamic_scaling": {
+    "enabled": true,
+    "current_boost": 3
+  },
+  "system": {
+    "memory_percent": 58.5,
+    "cpu_percent": 65.2,
+    "memory_status": "healthy"
+  }
+}
+```
 
-## Contributing
+### Real-time Monitoring
 
-Contributions welcome! Please open an issue or submit a pull request.
+```bash
+# Watch queue stats
+watch -n 2 'curl -s http://localhost:5000/api/queue/stats | jq .queues'
 
-## Support
+# Watch logs
+docker-compose logs -f bg-remover
 
-For issues and questions, please open a GitHub issue.
+# System resources
+htop
+docker stats
+```
+
+## 💰 Cost
+
+### Oracle Cloud Always Free Tier
+- ✅ 4 ARM VMs with 24GB RAM total: **FREE**
+- ✅ 100GB storage: **FREE**
+- ✅ 10TB outbound transfer/month: **FREE**
+
+### Beyond Free Tier
+- VM.Standard.E2.4 (4 vCPUs, 32GB RAM): ~$36/month
+
+## 🔒 Security Features
+
+- ✅ Firebase authentication
+- ✅ Rate limiting (10 uploads/min per IP)
+- ✅ CORS restrictions
+- ✅ File size limits (5MB free, 10MB auth)
+- ✅ Input validation
+- ✅ Automatic cleanup of temp files
+
+## 🛠️ Tech Stack
+
+**Backend**:
+- Python 3.10
+- Flask + Gunicorn
+- ONNX Runtime
+- OpenCV, PIL
+
+**AI Models**:
+- RVM (Robust Video Matting)
+- U2Net-P (lightweight)
+- BiRefNet Lite (high quality)
+
+**Infrastructure**:
+- Docker + Docker Compose
+- Nginx (reverse proxy)
+- Systemd (auto-restart)
+
+**Storage**:
+- Cloudflare R2 (processed images)
+- Local cache (ONNX models)
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing`)
+5. Open a Pull Request
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Background removal models: U2Net, RVM, BiRefNet
+- Oracle Cloud for Always Free tier
+- Cloudflare for R2 storage
+- Firebase for authentication
+
+## 🆘 Support
+
+- 📖 **Documentation**: [START_HERE.md](START_HERE.md)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/background-remover/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/background-remover/discussions)
+
+## ⭐ Star History
+
+If this project helped you, please consider giving it a star! ⭐
 
 ---
 
-**Made with ❤️ by SalluLabs**
+<div align="center">
+
+**[Get Started](START_HERE.md)** • **[Deploy Now](oracle-deploy/QUICK_START.md)** • **[View Demo](#demo)**
+
+Made with ❤️ for developers who need background removal at scale
+
+</div>

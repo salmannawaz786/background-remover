@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file, render_template, jsonify, session, redirect, url_for, send_from_directory
+from flask import Flask, request, send_file, jsonify, session, send_from_directory
 from flask_cors import CORS
 from PIL import Image
 import io
@@ -14,7 +14,6 @@ import psutil
 from threading import Timer
 import uuid
 import sys
-from queue import Queue
 import threading
 from dotenv import load_dotenv
 import firebase_admin
@@ -23,6 +22,10 @@ from brevo_email import send_verification_email, verify_otp
 import boto3
 from botocore.exceptions import ClientError
 from model_manager_v4 import get_model_manager
+from queue_manager import get_queue_manager, JobType, JobStatus
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Load environment variables
 
 # Load environment variables
@@ -45,12 +48,29 @@ def serve_static(filename):
     except:
         return "File not found", 404
 # Configure logging
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler that swallows UnicodeEncodeError on Windows consoles
+    using cp1252 (e.g. when a third-party library logs an emoji)."""
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except UnicodeEncodeError:
+            try:
+                msg = self.format(record).encode(self.stream.encoding or "utf-8", errors="replace").decode(
+                    self.stream.encoding or "utf-8", errors="replace"
+                )
+                self.stream.write(msg + self.terminator)
+                self.flush()
+            except Exception:
+                self.handleError(record)
+
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('app.log')
+        _SafeStreamHandler(sys.stdout),
+        logging.FileHandler('app.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -100,13 +120,22 @@ if R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY:
 else:
     logger.warning("R2 credentials not provided. Image upload to R2 will be disabled.")
 
-# Enable CORS - restrict to our own domain in production
+# Enable CORS - restrict to our own domain(s) in production
 ALLOWED_ORIGINS = [
     'https://bgremover.sallulabs.com',
     'http://localhost:5001',
     'http://127.0.0.1:5001',
+    # Next.js frontend (App Router) dev server
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
 ]
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, methods=["GET", "POST"], allow_headers=["Content-Type"])
+# Extra origins (e.g. the Vercel production/preview domains) can be added
+# without a code change via a comma-separated env var.
+_extra_origins = os.getenv('EXTRA_ALLOWED_ORIGINS', '')
+if _extra_origins:
+    ALLOWED_ORIGINS.extend(o.strip() for o in _extra_origins.split(',') if o.strip())
+
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "Authorization"])
 
 # Security headers middleware
 @app.after_request
@@ -136,33 +165,25 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 MAX_MEMORY_PERCENT = 92
 memory_warning_issued = False
 
-# Request queue system - max 2 concurrent processing
-MAX_CONCURRENT_REQUESTS = 2
-request_queue = Queue(maxsize=10)  # Max 10 in queue
-active_requests = 0
-active_requests_lock = threading.Lock()
-
-# Thread pool - CPU-safe: executor handles compute, waitress handles I/O
-cpu_count = psutil.cpu_count(logical=False) or 2
-max_workers = max(1, cpu_count - 1)  # Leave 1 core for web I/O
-executor = ThreadPoolExecutor(max_workers=max_workers)
-logger.info(f"Initialized thread pool with {max_workers} workers (physical cores: {cpu_count})")
-logger.info(f"Request queue: max {MAX_CONCURRENT_REQUESTS} concurrent, {request_queue.maxsize} queue size")
+# Initialize smart queue manager
+# For 24GB RAM / 4 vCPUs: 3 fast workers, 2 pro workers
+queue_manager = get_queue_manager()
+logger.info(f"Smart queue manager initialized")
 
 # Load model manager
 try:
-    logger.info("Initializing background remover (RVM + RMBG smart routing)...")
+    logger.info("Initializing background remover (RVM + U2Net-P + BREFNet)...")
     model_manager = get_model_manager()
     available_models = model_manager.get_available_models()
     logger.info(f"Available models: {list(available_models.keys())}")
     for mode, info in available_models.items():
         logger.info(f"  - {mode}: {info['name']} ({info.get('size_mb', 0):.1f}MB)")
-    # Pre-load RVM (persons) immediately - 15MB, fast load
     model_manager.preload_rvm()
     logger.info("RVM (persons) loading in background...")
-    # Pre-load RMBG (objects) in background
-    model_manager.preload_rmbg()
-    logger.info("RMBG (objects) loading in background...")
+    model_manager.preload_u2netp()
+    logger.info("U2Net-P (fast objects) loading in background...")
+    model_manager.preload_brefnet()
+    logger.info("BREFNet Lite (pro) loading in background...")
 except Exception as e:
     logger.error(f"Failed to initialize model manager: {str(e)}")
     model_manager = None
@@ -174,12 +195,12 @@ def require_auth(f):
     def decorated_function(*args, **kwargs):
         # Get token from header
         auth_header = request.headers.get('Authorization')
-        
+
         if not auth_header or not auth_header.startswith('Bearer '):
             return jsonify({'error': 'Unauthorized - No token provided'}), 401
-        
+
         token = auth_header.split('Bearer ')[1]
-        
+
         try:
             # Verify Firebase token
             decoded_token = firebase_auth.verify_id_token(token)
@@ -189,16 +210,50 @@ def require_auth(f):
         except Exception as e:
             logger.error(f"Token verification failed: {str(e)}")
             return jsonify({'error': 'Unauthorized - Invalid token'}), 401
-    
+
     return decorated_function
 
-def process_image(image_path, model_mode='fast', output_format='webp'):
-    """Process image with selected model
+
+def get_authenticated_user_id():
+    """
+    Return the authenticated user id from EITHER:
+      1) Flask session (if /verify-token was called earlier), or
+      2) `Authorization: Bearer <firebase_id_token>` header.
+
+    Returns (uid, email) or (None, None) if not authenticated.
+    Never raises - invalid Bearer tokens are simply treated as anonymous.
+    """
+    # 1) Flask session (legacy / verify-token flow)
+    uid = session.get('user_id')
+    if uid:
+        return uid, session.get('user_email')
+
+    # 2) Bearer token in Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        token = auth_header.split('Bearer ', 1)[1].strip()
+        if token:
+            try:
+                decoded = firebase_auth.verify_id_token(token)
+                # Also cache on the request so we don't re-verify later
+                request.user_id = decoded['uid']
+                request.user_email = decoded.get('email')
+                return decoded['uid'], decoded.get('email')
+            except Exception as e:
+                logger.debug(f"Bearer token rejected: {e}")
+
+    return None, None
+
+def process_image_task(image_path, model_mode='fast', output_format='webp'):
+    """Process image with selected model - queue worker task
     
     Args:
         image_path: Path to input image
-        model_mode: 'fast' (U2Net Silueta) or 'hd' (RMBG-1.4)
+        model_mode: 'fast' (RVM/U2Net-P) or 'pro' (BiRefNet)
         output_format: 'webp' or 'png'
+    
+    Returns:
+        (img_io, processing_time, mimetype)
     """
     start_time = time.time()
     
@@ -285,46 +340,22 @@ def check_memory_usage():
 
 # Routes
 
-# PWA: Service Worker must be served from root scope
-@app.route('/sw.js')
-def serve_sw():
-    response = send_from_directory('static', 'sw.js')
-    response.headers['Content-Type'] = 'application/javascript'
-    response.headers['Service-Worker-Allowed'] = '/'
-    response.headers['Cache-Control'] = 'no-cache'
-    return response
-
-# PWA: Manifest with correct MIME type
-@app.route('/manifest.json')
-def serve_manifest():
-    response = send_from_directory('static', 'manifest.json')
-    response.headers['Content-Type'] = 'application/manifest+json'
-    return response
-
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-@app.route('/login')
-def login():
-    return render_template('login.html')
-
-@app.route('/signup')
-def signup():
-    return render_template('signup.html')
-
 @app.route('/api/config')
 def get_firebase_config():
     """Serve Firebase config - only accessible from same origin"""
-    # Check referer to ensure request is from our domain
+    # Allow any of the allowed CORS origins to call /api/config.
     referer = request.headers.get('Referer', '')
-    allowed_origins = [
-        'https://bgremover.sallulabs.com',
-        'http://localhost:5000',
-        'http://127.0.0.1:5000'
-    ]
+    origin_header = request.headers.get('Origin', '')
+    app_url = os.getenv('APP_URL', '').rstrip('/')
+    allowed_origins = list(ALLOWED_ORIGINS)
+    if app_url:
+        allowed_origins.append(app_url)
     
-    is_allowed = any(referer.startswith(origin) for origin in allowed_origins) or not referer
+    is_allowed = (
+        any(referer.startswith(origin) for origin in allowed_origins)
+        or any(origin_header == origin for origin in allowed_origins)
+        or not referer
+    )
     
     if not is_allowed:
         return jsonify({'error': 'Unauthorized'}), 403
@@ -409,8 +440,8 @@ def upload_image():
         file_size = file.tell()
         file.seek(0)
         
-        # Check authentication status
-        user_id = session.get('user_id')
+        # Check authentication status (Flask session OR Bearer token)
+        user_id, _user_email = get_authenticated_user_id()
         is_authenticated = user_id is not None
         
         # Model mode: 'fast' (Silueta) or 'pro' (BiRefNet .pt)
@@ -468,63 +499,100 @@ def upload_image():
             session[rate_limit_key] = daily_count + 1
         
         # Save with unique filename
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"{unique_id}_{secure_filename(file.filename)}"
+        job_id = str(uuid.uuid4())[:8]
+        filename = f"{job_id}_{secure_filename(file.filename)}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
+
+        # Submit to smart queue
+        job_type = JobType.BG_PRO if model_mode == 'pro' else JobType.BG_FAST
         
         try:
-            # Process image with selected model
-            timeout = 30 if model_mode == 'pro' else 12
-            future = executor.submit(process_image, filepath, model_mode, output_format)
-            img_io, processing_time, mimetype = future.result(timeout=timeout)
+            job = queue_manager.submit_job(
+                job_id=job_id,
+                job_type=job_type,
+                task_func=process_image_task,
+                image_path=filepath,
+                model_mode=model_mode,
+                output_format=output_format
+            )
+        except ValueError as e:
+            # Queue full or memory critical
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+            logger.warning(f"Job submission rejected: {e}")
+            return jsonify({
+                'error': str(e),
+                'retryAfter': 10,
+                'serverLoad': 'overloaded'
+            }), 503
+
+        try:
+            # Wait for job to complete (with timeout)
+            timeout = 60 if model_mode == 'pro' else 30
+            job = queue_manager.wait_for_job(job, timeout=timeout)
+            
+            # Check job status
+            if job.status == JobStatus.FAILED:
+                error_msg = job.error or 'Processing failed'
+                logger.error(f"Job {job_id} failed: {error_msg}")
+                if 'model' in error_msg.lower():
+                    return jsonify({'error': 'Processing model not ready. Please refresh and try again.'}), 503
+                return jsonify({'error': error_msg}), 500
+            
+            elif job.status == JobStatus.TIMEOUT:
+                return jsonify({'error': 'Processing took too long. Please try with a smaller image.'}), 504
+            
+            elif job.status != JobStatus.COMPLETED:
+                return jsonify({'error': 'Processing failed. Please try again.'}), 500
+            
+            # Job completed successfully
+            img_io, processing_time, mimetype = job.result
             
             # Copy image bytes for R2 upload (so we can send response immediately)
             img_io.seek(0)
             image_bytes = img_io.read()
             
-            # Upload to R2 (synchronous for debugging)
+            # Upload to R2 in background (fire-and-forget)
             if s3_client and R2_BUCKET_NAME:
-                try:
-                    r2_key = f"removed-bg-images/{unique_id}_{file.filename}"
-                    logger.info(f"Starting R2 upload: {r2_key} ({len(image_bytes)} bytes)")
-                    
-                    s3_client.put_object(
-                        Bucket=R2_BUCKET_NAME,
-                        Key=r2_key,
-                        Body=image_bytes,
-                        ContentType=mimetype
-                    )
-                    
-                    public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
-                    if public_domain:
-                        r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
-                    else:
-                        r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
-                    
-                    logger.info(f"R2 upload SUCCESS: {r2_url}")
-                except Exception as e:
-                    logger.error(f"R2 upload FAILED: {str(e)}")
-                    logger.error(f"R2 config - Endpoint: {R2_ENDPOINT}, Bucket: {R2_BUCKET_NAME}")
-                    # Don't fail the request, just log the error
+                def r2_upload_background(img_bytes, r2_key):
+                    try:
+                        s3_client.put_object(
+                            Bucket=R2_BUCKET_NAME,
+                            Key=r2_key,
+                            Body=img_bytes,
+                            ContentType=mimetype
+                        )
+                        public_domain = os.getenv('R2_PUBLIC_DOMAIN', '')
+                        if public_domain:
+                            r2_url = f"{public_domain.rstrip('/')}/{r2_key}"
+                        else:
+                            r2_url = f"https://{R2_BUCKET_NAME}.r2.dev/{r2_key}"
+                        logger.info(f"R2 upload success: {r2_url}")
+                    except Exception as e:
+                        logger.error(f"R2 background upload error: {str(e)[:100]}")
+                
+                # Submit and forget - don't wait for result
+                r2_key = f"removed-bg-images/{job_id}_{file.filename}"
+                threading.Thread(target=r2_upload_background, args=(image_bytes, r2_key), daemon=True).start()
+                logger.info(f"R2 upload started in background: {r2_key}")
             
             # Send response immediately (don't wait for R2)
             response_io = io.BytesIO(image_bytes)
             response = send_file(response_io, mimetype=mimetype)
             response.headers['X-Processing-Time'] = str(processing_time)
             
+            # Add queue stats to response headers
+            response.headers['X-Queue-Wait-Time'] = f"{job.wait_time:.2f}"
+            response.headers['X-Queue-Position'] = str(job.job_id)
+            
             return response
-        except TimeoutError:
-            return jsonify({'error': 'Processing took too long. Please try with a smaller image.'}), 504
-        except MemoryError as e:
-            gc.collect()
-            return jsonify({'error': str(e) or 'Server is busy. Please try again in a moment.'}), 503
+        
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Processing error: {error_msg}")
-            # Provide user-friendly error messages
-            if 'model' in error_msg.lower():
-                return jsonify({'error': 'Processing model not ready. Please refresh and try again.'}), 503
+            logger.error(f"Upload error: {error_msg}")
             return jsonify({'error': 'Failed to process image. Please try again.'}), 500
         finally:
             # Cleanup uploaded file
@@ -540,6 +608,22 @@ def upload_image():
         gc.collect()
         return jsonify({'error': 'Upload failed. Please try again.'}), 500
 
+@app.route('/models/<path:filename>')
+def serve_model(filename):
+    """Serve ONNX model files for client-side download (BREFNet Lite, etc.)"""
+    allowed_model_files = {'model_fp16.onnx', 'rvm.onnx', 'rmbg14.onnx'}
+    if filename not in allowed_model_files:
+        return "Not found", 404
+    try:
+        from flask import send_from_directory
+        response = send_from_directory(BASE_DIR, filename, mimetype='application/octet-stream')
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Cache-Control'] = 'public, max-age=86400'
+        return response
+    except:
+        return "Not found", 404
+
+
 @app.route('/api/models')
 def get_models():
     """Get available background removal models"""
@@ -552,17 +636,26 @@ def get_models():
 
 @app.route('/health')
 def health():
-    """Health check endpoint with model info"""
+    """Health check endpoint with queue and model info"""
     mem_usage = check_memory_usage()
+    queue_stats = queue_manager.get_queue_stats()
+    
     health_data = {
         'status': 'healthy' if mem_usage < MAX_MEMORY_PERCENT else 'degraded',
         'models': model_manager.get_available_models() if model_manager else {},
         'model_loaded': model_manager is not None,
         'memory_usage': f"{mem_usage}%",
-        'workers': executor._max_workers
+        'queue': queue_stats
     }
     
     return jsonify(health_data)
+
+
+@app.route('/api/queue/stats')
+def queue_stats():
+    """Get detailed queue statistics"""
+    stats = queue_manager.get_queue_stats()
+    return jsonify(stats)
 
 @app.route('/api/upload-to-r2', methods=['POST'])
 def upload_processed_to_r2():
