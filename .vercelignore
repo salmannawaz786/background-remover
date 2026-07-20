@@ -10,7 +10,6 @@ uploads
 desktop
 oracle-deploy
 static
-public
 app.log
 dev-err.log
 dev-out.log

@@ -9,6 +9,27 @@ const nextConfig = {
       { protocol: "https", hostname: "images.unsplash.com" },
     ],
   },
+  async rewrites() {
+    const backend = process.env.BACKEND_URL || "http://141.253.199.23";
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${backend}/api/:path*`,
+      },
+      {
+        source: "/upload",
+        destination: `${backend}/upload`,
+      },
+      {
+        source: "/health",
+        destination: `${backend}/health`,
+      },
+      {
+        source: "/static/:path*",
+        destination: `${backend}/static/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

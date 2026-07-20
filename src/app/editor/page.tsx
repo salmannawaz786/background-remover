@@ -314,7 +314,6 @@ export default function EditorPage() {
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Load client-side ONNX processor (non-blocking) */}
       <Script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js" strategy="afterInteractive" />
-      <Script src="/static/onnx-worker.js" strategy="afterInteractive" />
       <Script src="/static/client-processor-v2.js" strategy="afterInteractive" />
 
       {/* Hidden file input for new image */}
