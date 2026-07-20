@@ -53,8 +53,8 @@ COPY rmbg14.onnx .
 # Create necessary directories
 RUN mkdir -p uploads .model_cache .onnx_cache static
 
-# Copy pre-downloaded ONNX models (if they exist)
-COPY .onnx_cache/*.onnx .onnx_cache/ 2>/dev/null || true
+# Copy pre-downloaded ONNX models (if they exist) — skipped if .onnx_cache is empty/missing
+RUN mkdir -p .onnx_cache
 
 # Copy static files
 COPY static/ static/ 2>/dev/null || true
