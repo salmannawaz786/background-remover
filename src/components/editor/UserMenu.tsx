@@ -2,91 +2,52 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 import { getFirebaseApp } from "@/lib/firebase";
-import { onAuthStateChanged, signOut, type User as FBUser } from "firebase/auth";
+import { signOut } from "firebase/auth";
 import Link from "next/link";
-import { LogOut, User, Coins, Share2, Copy, Check } from "lucide-react";
+import { LogOut, User, Coins, Copy, Check } from "lucide-react";
 import Image from "next/image";
 import { toast } from "sonner";
 
 export default function UserMenu() {
-  const { user, setUser, updateCredits } = useStore();
+  const { user } = useStore();
   const [open, setOpen] = useState(false);
-  const [fbUser, setFbUser] = useState<FBUser | null>(null);
-  const [firebaseReady, setFirebaseReady] = useState(false);
   const [authInstance, setAuthInstance] = useState<any>(null);
   const [totalInvites, setTotalInvites] = useState(0);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    let unsubFirestore: (() => void) | null = null;
-    let unsubAuth: (() => void) | null = null;
+    getFirebaseApp()
+      .then(async (app) => {
+        const { getAuth } = await import("firebase/auth");
+        setAuthInstance(getAuth(app));
+      })
+      .catch(() => {});
+  }, []);
 
-    const setupAuth = async () => {
+  // Listen for totalInvites changes from Firestore (auth already handled by FirebaseInit)
+  useEffect(() => {
+    if (!user) return;
+    let unsub: (() => void) | null = null;
+
+    const setup = async () => {
       try {
         const app = await getFirebaseApp();
-        const { getAuth } = await import("firebase/auth");
-        const auth = getAuth(app);
-        setAuthInstance(auth);
-        setFirebaseReady(true);
-
-        unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-          setFbUser(firebaseUser);
-
-          // Clean up previous Firestore listener
-          if (unsubFirestore) { unsubFirestore(); unsubFirestore = null; }
-
-          if (firebaseUser) {
-            setUser({ uid: firebaseUser.uid, email: firebaseUser.email ?? "" });
-
-            // Real-time Firestore credits (like old firebaseauth.js onSnapshot)
-            try {
-              const { getFirestore, doc, onSnapshot, getDoc } = await import("firebase/firestore");
-              const db = getFirestore(app);
-              
-              // Set up real-time listener
-              unsubFirestore = onSnapshot(doc(db, "users", firebaseUser.uid), (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                  const userData = docSnapshot.data();
-                  const credits = userData.credits || 0;
-                  const invites = userData.totalInvites || 0;
-                  updateCredits(credits);
-                  setTotalInvites(invites);
-                }
-              }, (error) => {
-                console.error('Error listening to user stats:', error);
-              });
-              
-              // Also get initial data immediately
-              const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-              if (userDoc.exists()) {
-                const userData = userDoc.data();
-                const credits = userData.credits || 0;
-                const invites = userData.totalInvites || 0;
-                updateCredits(credits);
-                setTotalInvites(invites);
-              }
-            } catch {
-              // Firestore not available, skip
-            }
-          } else {
-            setUser(null);
+        const { getFirestore, doc, onSnapshot } = await import("firebase/firestore");
+        const db = getFirestore(app);
+        unsub = onSnapshot(doc(db, "users", user.uid), (snap) => {
+          if (snap.exists()) {
+            setTotalInvites(snap.data().totalInvites || 0);
           }
         });
-      } catch (err) {
-        console.error("Firebase setup failed:", err);
-      }
+      } catch {}
     };
 
-    setupAuth();
+    setup();
+    return () => { if (unsub) unsub(); };
+  }, [user]);
 
-    return () => {
-      if (unsubAuth) unsubAuth();
-      if (unsubFirestore) unsubFirestore();
-    };
-  }, [setUser, updateCredits]);
-
-  const displayName = fbUser?.displayName || fbUser?.email?.split("@")[0] || "User";
-  const avatarUrl = fbUser?.photoURL;
+  const displayName = user?.displayName || user?.email?.split("@")[0] || "User";
+  const avatarUrl = user?.photoURL;
 
   const inviteLink = user ? `${typeof window !== 'undefined' ? window.location.origin : ''}/signup?ref=${user.uid}` : '';
 

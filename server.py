@@ -467,12 +467,12 @@ def upload_image():
             output_format = 'webp'
         
         # File size limits
-        max_size_free = 5 * 1024 * 1024  # 5MB for free users
+        max_size_free = 5 * 1024 * 1024  # 5MB for non-authenticated users
         max_size_premium = 10 * 1024 * 1024  # 10MB for authenticated users
         
         if not is_authenticated and file_size > max_size_free:
             return jsonify({
-                'error': f'File size ({file_size / (1024*1024):.1f}MB) exceeds the free tier limit of 5MB. Please sign up to upload files up to 10MB!',
+                'error': f'File size ({file_size / (1024*1024):.1f}MB) exceeds the non-authenticated limit of 5MB. Sign in to upload files up to 10MB!',
                 'requiresAuth': True
             }), 413
         
@@ -489,9 +489,9 @@ def upload_image():
             
             # Check daily usage (stored in session for simplicity)
             daily_count = session.get(rate_limit_key, 0)
-            if daily_count >= 5:
+            if daily_count >= 10:
                 return jsonify({
-                    'error': 'Daily limit reached! Free users can process 5 images per day. Sign up for unlimited processing!',
+                    'error': 'Daily limit reached! Non-authenticated users can process 10 images per day. Sign in for unlimited processing!',
                     'requiresAuth': True
                 }), 429
             
@@ -700,7 +700,7 @@ def upload_processed_to_r2():
 @app.errorhandler(413)
 def request_entity_too_large(error):
     return jsonify({
-        'error': 'File is too large! Maximum upload size is 10MB for signed-in users, 5MB for free users. Please reduce the file size and try again.',
+        'error': 'File is too large! Maximum upload size is 10MB for signed-in users, 5MB for non-authenticated users. Please reduce the file size and try again.',
         'maxSize': '10MB'
     }), 413
 

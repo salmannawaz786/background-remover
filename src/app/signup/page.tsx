@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, googleProvider, facebookProvider, twitterProvider, getFirebaseApp } from "@/lib/firebase";
+import { useStore } from "@/lib/store";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import Image from "next/image";
@@ -45,6 +46,7 @@ const providers = [
 export default function SignupPage() {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
+  const setUser = useStore((s) => s.setUser);
 
   const handleSignIn = async (providerId: string, provider: typeof googleProvider) => {
     setLoading(providerId);
@@ -52,6 +54,7 @@ export default function SignupPage() {
       await getFirebaseApp();
       const { signInWithPopup: signIn } = await import("firebase/auth");
       const cred = await signIn(auth, provider);
+      setUser({ uid: cred.user.uid, email: cred.user.email ?? "", displayName: cred.user.displayName ?? undefined, photoURL: cred.user.photoURL ?? undefined });
       const app = await getFirebaseApp();
       const db = getFirestore(app);
       const userDoc = await getDoc(doc(db, "users", cred.user.uid));

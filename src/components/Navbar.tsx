@@ -3,8 +3,8 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import { Sun, Moon, Download, Menu, X, Coins, LogOut, ChevronDown } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
+import { signOut, getAuth } from "firebase/auth";
 import { getFirebaseApp } from "@/lib/firebase";
-import { onAuthStateChanged, signOut, type User as FBUser } from "firebase/auth";
 import { useStore } from "@/lib/store";
 import { isPWA } from "@/lib/pwa-utils";
 import Image from "next/image";
@@ -16,11 +16,8 @@ export default function Navbar() {
   const [dropOpen, setDropOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<Event & { prompt: () => void } | null>(null);
   const [showInstall, setShowInstall] = useState(false);
-  const [fbUser, setFbUser] = useState<FBUser | null>(null);
-  const [authInstance, setAuthInstance] = useState<any>(null);
-  const [authChecked, setAuthChecked] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
-  const { user, setUser, updateCredits } = useStore();
+  const { user, authChecked, setUser } = useStore();
 
   useEffect(() => {
     setMounted(true);
@@ -32,75 +29,6 @@ export default function Navbar() {
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
-
-  useEffect(() => {
-    let unsub: (() => void) | null = null;
-    let unsubFirestore: (() => void) | null = null;
-    
-    const setupAuth = async () => {
-      try {
-        const app = await getFirebaseApp();
-        const { getAuth, onAuthStateChanged } = await import("firebase/auth");
-        const auth = getAuth(app);
-        setAuthInstance(auth);
-        
-        unsub = onAuthStateChanged(auth, async (u) => {
-          setFbUser(u);
-          setAuthChecked(true);
-          if (u) {
-            setUser({ uid: u.uid, email: u.email ?? "" });
-            
-            // Set up real-time Firestore listener for credits
-            try {
-              const { getFirestore, doc, onSnapshot, getDoc } = await import("firebase/firestore");
-              const db = getFirestore(app);
-              
-              // Remove existing listener if any
-              if (unsubFirestore) { unsubFirestore(); unsubFirestore = null; }
-              
-              // Set up real-time listener
-              unsubFirestore = onSnapshot(doc(db, "users", u.uid), (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                  const userData = docSnapshot.data();
-                  const credits = userData.credits || 0;
-                  updateCredits(credits);
-                  console.log(`✅ Credits updated in real-time: ${credits}`);
-                }
-              }, (error) => {
-                console.error('Error listening to user stats:', error);
-              });
-              
-              // Also get initial data immediately
-              const userDoc = await getDoc(doc(db, "users", u.uid));
-              if (userDoc.exists()) {
-                const userData = userDoc.data();
-                const credits = userData.credits || 0;
-                updateCredits(credits);
-              }
-            } catch (err) {
-              // Firestore not available in this session — credits will stay at default.
-              console.warn("Firestore real-time credits unavailable:", err);
-            }
-          } else {
-            setUser(null);
-            // Clean up Firestore listener
-            if (unsubFirestore) { unsubFirestore(); unsubFirestore = null; }
-          }
-        });
-      } catch {
-        // Firebase not available
-        setUser(null);
-        setAuthChecked(true);
-      }
-    };
-    
-    setupAuth();
-    
-    return () => {
-      if (unsub) unsub();
-      if (unsubFirestore) unsubFirestore();
-    };
-  }, [setUser, updateCredits]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -119,7 +47,6 @@ export default function Navbar() {
       setDeferredPrompt(null);
       setShowInstall(false);
     } else {
-      // If prompt is not available, show toast with instructions
       import('sonner').then(({ toast }) => {
         toast.info("To install: tap the share icon (iOS) or menu (Android/Desktop) and select 'Add to Home Screen'");
       });
@@ -127,13 +54,16 @@ export default function Navbar() {
   };
 
   const handleSignOut = async () => {
-    if (authInstance) await signOut(authInstance);
+    try {
+      const app = await getFirebaseApp();
+      await signOut(getAuth(app));
+    } catch {}
     setDropOpen(false);
     setUser(null);
   };
 
-  const displayName = fbUser?.displayName || fbUser?.email?.split("@")[0] || "User";
-  const avatarUrl = fbUser?.photoURL;
+  const displayName = user?.displayName || user?.email?.split("@")[0] || "User";
+  const avatarUrl = user?.photoURL;
 
   return (
     <nav className="sticky top-0 z-50 glass border-b border-[var(--glass-border)]">
@@ -181,7 +111,7 @@ export default function Navbar() {
           {!authChecked ? (
             /* Loading: show a minimal skeleton to prevent flash */
             <div className="w-20 h-9 rounded-full bg-muted/30 animate-pulse" />
-          ) : fbUser ? (
+          ) : user ? (
             /* Logged in: avatar + credits + dropdown */
             <div className="relative" ref={dropRef}>
               <button onClick={() => setDropOpen(!dropOpen)}
@@ -204,7 +134,7 @@ export default function Navbar() {
                 <div className="absolute right-0 top-full mt-2 w-56 glass border border-[var(--glass-border)] rounded-2xl p-2 z-50 shadow-2xl">
                   <div className="px-3 py-2.5 border-b border-[var(--glass-border)] mb-1">
                     <p className="text-sm font-semibold text-foreground truncate">{displayName}</p>
-                    <p className="text-xs text-muted-foreground truncate">{fbUser.email}</p>
+                    <p className="text-xs text-muted-foreground truncate">{user.email}</p>
                     <div className="flex items-center gap-1 mt-1.5">
                       <Coins size={12} className="text-primary" />
                       <span className="text-sm font-bold text-primary">{user?.credits ?? 0}</span>
@@ -245,10 +175,10 @@ export default function Navbar() {
         <div className="md:hidden border-t border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-xl px-5 py-4 flex flex-col gap-4 text-sm">
           <Link href="/#how-it-works" onClick={() => setMenuOpen(false)} className="text-muted-foreground hover:text-foreground py-1">How it works</Link>
           <Link href="/#tools" onClick={() => setMenuOpen(false)} className="text-muted-foreground hover:text-foreground py-1">Tools</Link>
-          {!fbUser && (
+          {!user && (
             <Link href="/login" onClick={() => setMenuOpen(false)} className="text-muted-foreground hover:text-foreground py-1">Sign in</Link>
           )}
-          {fbUser && (
+          {user && (
             <div className="flex items-center gap-2 py-1">
               <Coins size={14} className="text-primary" />
               <span className="text-foreground font-semibold">{user?.credits ?? 0} credits</span>

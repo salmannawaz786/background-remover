@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { auth, googleProvider, facebookProvider, twitterProvider, getFirebaseApp } from "@/lib/firebase";
+import { useStore } from "@/lib/store";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import Image from "next/image";
@@ -44,13 +45,15 @@ const providers = [
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
+  const setUser = useStore((s) => s.setUser);
 
   const handleSignIn = async (providerId: string, provider: typeof googleProvider) => {
     setLoading(providerId);
     try {
       await getFirebaseApp();
       const { signInWithPopup: signIn } = await import("firebase/auth");
-      await signIn(auth, provider);
+      const cred = await signIn(auth, provider);
+      setUser({ uid: cred.user.uid, email: cred.user.email ?? "", displayName: cred.user.displayName ?? undefined, photoURL: cred.user.photoURL ?? undefined });
       router.push("/");
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;

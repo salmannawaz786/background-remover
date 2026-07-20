@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.0'
 
 services:
   bg-remover:
@@ -36,16 +36,11 @@ services:
     volumes:
       - uploads:/app/uploads
       - model_cache:/app/.model_cache
-      - onnx_cache:/app/.onnx_cache
-    mem_limit: 20g
-    mem_reservation: 10g
-    cpus: 3.5
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
 
   nginx:
     image: nginx:alpine
@@ -64,5 +59,4 @@ services:
 volumes:
   uploads:
   model_cache:
-  onnx_cache:
   nginx_logs:

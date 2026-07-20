@@ -8,7 +8,6 @@ import Script from "next/script";
 import { ArrowLeft, Download, Sun, Moon, Wand2, ImagePlus, Layers, Smartphone, Clipboard, X, Clock, CheckCircle2, MoreVertical } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { removeBackground, removeBackgroundClient, downloadProModel, type BgModel, type BgFormat } from "@/lib/api";
-import { getFirebaseApp } from "@/lib/firebase";
 import { toast } from "sonner";
 import Image from "next/image";
 import { isPWA } from "@/lib/pwa-utils";
@@ -28,8 +27,8 @@ export default function EditorPage() {
   const [outputFormat, setOutputFormat] = useState<BgFormat>("png");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const { uploadedImage, uploadedFile, resultImage, setResultImage, setUploadedImage, selectedModel } = useStore();
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { user, uploadedImage, uploadedFile, resultImage, setResultImage, setUploadedImage, selectedModel } = useStore();
+  const isAuthenticated = !!user;
   const [processing, setProcessing] = useState(false);
   const [processingMs, setProcessingMs] = useState<number | null>(null);
   const [modelDownloadPct, setModelDownloadPct] = useState<number | null>(null);
@@ -74,27 +73,6 @@ export default function EditorPage() {
     setProcessingMs(null);
     setMobileMenuOpen(false);
   };
-
-  useEffect(() => {
-    let unsub: (() => void) | null = null;
-
-    const setupAuth = async () => {
-      try {
-        const app = await getFirebaseApp();
-        const { getAuth, onAuthStateChanged } = await import("firebase/auth");
-        const auth = getAuth(app);
-        unsub = onAuthStateChanged(auth, (u) => setIsAuthenticated(!!u));
-      } catch {
-        setIsAuthenticated(false);
-      }
-    };
-
-    setupAuth();
-
-    return () => {
-      if (unsub) unsub();
-    };
-  }, []);
 
   // On mount, just check whether the on-device pro model is already cached
   // from a previous visit — never download proactively here.

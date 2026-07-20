@@ -3,6 +3,8 @@ import { create } from "zustand";
 interface User {
   uid: string;
   email: string;
+  displayName?: string;
+  photoURL?: string;
   credits?: number;
 }
 
@@ -19,6 +21,8 @@ interface AppStore {
   user: User | null;
   setUser: (user: User | null) => void;
   updateCredits: (credits: number) => void;
+  authChecked: boolean;
+  setAuthChecked: (checked: boolean) => void;
 
   // Guest fast mode tracking (3 free uses without login)
   guestFastUses: number;
@@ -45,6 +49,8 @@ export const useStore = create<AppStore>((set, get) => ({
   setUser: (user) => set({ user }),
   updateCredits: (credits) =>
     set((state) => ({ user: state.user ? { ...state.user, credits } : null })),
+  authChecked: false,
+  setAuthChecked: (checked) => set({ authChecked: checked }),
 
   guestFastUses: (() => {
     if (typeof window === "undefined") return 0;
