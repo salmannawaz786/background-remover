@@ -410,6 +410,7 @@ class SmartQueueManager:
                     logger.info(f"Worker {job_type.value}-{worker_id} processing job {job.job_id} (waited {job.wait_time:.2f}s)")
                     
                     # Execute the task
+                    job.completed_at = time.time()
                     try:
                         result = job.task_func(*job.args, **job.kwargs)
                         job.result = result
@@ -423,8 +424,6 @@ class SmartQueueManager:
                         with self.lock:
                             self.stats['failed_jobs'] += 1
                         logger.error(f"Job {job.job_id} failed: {e}")
-                    
-                    job.completed_at = time.time()
                     job.event.set()
                     
                     # Cleanup
