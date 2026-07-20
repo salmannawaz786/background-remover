@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
-import { auth, googleProvider, facebookProvider, twitterProvider, getFirebaseApp } from "@/lib/firebase";
+import { auth, googleProvider, twitterProvider, getFirebaseApp } from "@/lib/firebase";
 import { useStore } from "@/lib/store";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -21,14 +21,6 @@ function GoogleIcon() {
   );
 }
 
-function FacebookIcon() {
-  return (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#1877F2">
-      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-    </svg>
-  );
-}
-
 function XIcon() {
   return (
     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
@@ -39,7 +31,6 @@ function XIcon() {
 
 const providers = [
   { id: "google",   label: "Continue with Google",   Icon: GoogleIcon,   provider: googleProvider,   bg: "hover:bg-[#4285F4]/10 border-[#4285F4]/30" },
-  { id: "facebook", label: "Continue with Facebook",  Icon: FacebookIcon, provider: facebookProvider, bg: "hover:bg-[#1877F2]/10 border-[#1877F2]/30" },
   { id: "twitter",  label: "Continue with X",         Icon: XIcon,        provider: twitterProvider,  bg: "hover:bg-foreground/5 border-border/40" },
 ];
 
@@ -62,11 +53,11 @@ export default function SignupPage() {
         await setDoc(doc(db, "users", cred.user.uid), {
           email: cred.user.email,
           displayName: cred.user.displayName,
-          credits: 10,
+          credits: 15,
           totalInvites: 0,
           createdAt: new Date().toISOString(),
         });
-        toast.success("Account created! You have 10 free credits.");
+        toast.success("Account created! You have 15 free credits.");
       }
       router.push("/");
     } catch (err: unknown) {
@@ -97,8 +88,8 @@ export default function SignupPage() {
         </div>
 
         <h1 className="text-2xl font-bold text-foreground mb-1 text-center">Get started free</h1>
-        <p className="text-muted-foreground text-sm mb-2 text-center">Create your account in one click</p>
-        <p className="text-xs text-primary/80 font-medium text-center mb-8">✦ 10 free credits on sign up</p>
+        <p className="text-muted-foreground text-sm mb-2 text-center">Sign up with your SalluLabs account</p>
+        <p className="text-xs text-primary/80 font-medium text-center mb-8">✦ 15 free credits on sign up</p>
 
         <div className="flex flex-col gap-3">
           {providers.map(({ id, label, Icon, provider, bg }) => (

@@ -1,0 +1,42 @@
+name: Deploy Backend to Oracle VM
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "server.py"
+      - "Dockerfile.production"
+      - "oracle-deploy/**"
+      - "requirements.txt"
+      - "models.py"
+      - "queue_manager.py"
+      - "model_manager_v4.py"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USERNAME }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/bg-remover
+            git pull origin master
+            cd oracle-deploy
+            docker-compose build --no-cache
+            docker-compose down
+            docker-compose up -d
+            sleep 10
+            if curl -f http://localhost:5000/health > /dev/null 2>&1; then
+              echo "✅ Backend deployed and healthy!"
+            else
+              echo "⚠️ Health check failed. Checking logs..."
+              docker-compose logs --tail=30 bg-remover
+              exit 1
+            fi
