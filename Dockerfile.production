@@ -42,7 +42,6 @@ COPY server.py .
 COPY model_manager_v4.py .
 COPY queue_manager.py .
 COPY brevo_email.py .
-COPY models.py .
 COPY birefnet_pytorch.py .
 COPY requirements.txt .
 
