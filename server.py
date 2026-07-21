@@ -292,9 +292,9 @@ def process_image_task(image_path, model_mode='fast', output_format='webp'):
                 output_image.save(img_io, 'PNG', compress_level=3)
                 mimetype = 'image/png'
             else:
-            # WEBP: fast encoding, good quality
-            output_image.save(img_io, 'WEBP', quality=90)
-            mimetype = 'image/webp'
+                # WEBP: fast encoding, good quality
+                output_image.save(img_io, 'WEBP', quality=90)
+                mimetype = 'image/webp'
             img_io.seek(0)
             
             # Cleanup
