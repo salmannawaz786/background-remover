@@ -43,6 +43,7 @@ RVM_CONFIG = {
 
 U2NETP_CONFIG = {
     'name': 'U2Net-P (fast objects)',
+    'url': 'https://huggingface.co/datasets/salmannawaz786/models/resolve/main/opt_u2netp.onnx',
     'file': os.path.join(BASE_DIR, '.onnx_cache', 'opt_u2netp.onnx'),
     'input_size': 320,
     'input_name': 'input.1',
@@ -239,6 +240,8 @@ def _get_u2netp_session():
     with _u2netp_lock:
         if _u2netp_session is not None:
             return _u2netp_session
+        if not _download_model(U2NETP_CONFIG['url'], U2NETP_CONFIG['file'], 'U2Net-P'):
+            raise RuntimeError("Failed to download U2Net-P model")
         import onnxruntime as ort
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -403,6 +406,14 @@ class BackgroundRemoverV4:
 
     def clear_cache(self):
         gc.collect()
+
+    def load_rvm(self):
+        """Load RVM synchronously (blocking)"""
+        _get_rvm_session()
+
+    def load_u2netp(self):
+        """Load U2Net-P synchronously (blocking)"""
+        _get_u2netp_session()
 
     def preload_rvm(self):
         """Pre-load RVM in background thread"""

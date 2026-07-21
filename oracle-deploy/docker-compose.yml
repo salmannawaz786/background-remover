@@ -36,6 +36,7 @@ services:
     volumes:
       - uploads:/app/uploads
       - model_cache:/app/.model_cache
+      - onnx_cache:/app/.onnx_cache
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
@@ -59,4 +60,5 @@ services:
 volumes:
   uploads:
   model_cache:
+  onnx_cache:
   nginx_logs:

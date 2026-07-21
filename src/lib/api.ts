@@ -20,10 +20,19 @@ async function getFirebaseAuthToken(): Promise<string | null> {
   try {
     const { getFirebaseApp } = await import("./firebase");
     const app = await getFirebaseApp();
-    const { getAuth } = await import("firebase/auth");
-    const user = getAuth(app).currentUser;
-    if (!user) return null;
-    return await user.getIdToken(false);
+    const { getAuth, onAuthStateChanged } = await import("firebase/auth");
+    const auth = getAuth(app);
+
+    const user = auth.currentUser;
+    if (user) return await user.getIdToken(false);
+
+    return await new Promise((resolve) => {
+      const unsub = onAuthStateChanged(auth, (u) => {
+        unsub();
+        if (u) u.getIdToken(false).then(resolve).catch(() => resolve(null));
+        else resolve(null);
+      });
+    });
   } catch {
     return null;
   }

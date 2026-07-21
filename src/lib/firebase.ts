@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, FacebookAuthProvider, TwitterAuthProvider, type Auth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, TwitterAuthProvider, type Auth } from "firebase/auth";
 
 let firebaseApp: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
@@ -65,5 +65,4 @@ export const auth = new Proxy({} as Auth, {
 });
 
 export const googleProvider = new GoogleAuthProvider();
-export const facebookProvider = new FacebookAuthProvider();
 export const twitterProvider = new TwitterAuthProvider();

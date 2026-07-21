@@ -88,28 +88,38 @@ export default function EditorPage() {
     })();
   }, []);
 
-  // Kick off the on-device pro model download in the background, but only
-  // once — after the user's first completed process (never before, so every
-  // request prior to that point is guaranteed to hit the server).
+  // Kick off all on-device model downloads in the background after the
+  // user's first completed process. Every request before models are ready
+  // is guaranteed to hit the server. Downloads persist via Cache API.
   const maybeStartBackgroundModelDownload = useCallback(async () => {
     if (typeof window === "undefined") return;
     const FLAG = "bgr_first_process_done";
-    if (localStorage.getItem(FLAG)) return;
+    const { downloadProModel, isClientProModelReady } = await import("@/lib/api");
+
+    // If already ready, nothing to download
+    if (isClientProModelReady()) {
+      setClientProReady(true);
+      localStorage.setItem(FLAG, "1");
+      return;
+    }
+
+    // If already triggered before, check if model actually cached
+    if (localStorage.getItem(FLAG)) {
+      return; // download already in progress or completed
+    }
+
     localStorage.setItem(FLAG, "1");
-    try {
-      const { isClientProModelReady } = await import("@/lib/api");
-      if (isClientProModelReady()) {
-        setClientProReady(true);
-        return;
-      }
-      await downloadProModel((pct) => {
-        setModelDownloadPct(Math.round(pct * 100));
-      });
+
+    // Download pro model (and implicitly fast models) in background
+    downloadProModel((pct) => {
+      setModelDownloadPct(Math.round(pct * 100));
+    }).then(() => {
       setClientProReady(true);
       setModelDownloadPct(null);
-    } catch {
+    }).catch(() => {
+      localStorage.removeItem(FLAG); // allow retry on next visit
       setModelDownloadPct(null);
-    }
+    });
   }, []);
 
   const handleNewImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
