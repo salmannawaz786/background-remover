@@ -16,6 +16,7 @@ import LoadingState from "@/components/editor/LoadingState";
 import FinalEditor, { type BgChoice } from "@/components/editor/FinalEditor";
 import UserMenu from "@/components/editor/UserMenu";
 import BulkUploader from "@/components/editor/BulkUploader";
+import CropModal from "@/components/editor/CropModal";
 
 type EditorTab = "single" | "bulk";
 
@@ -33,7 +34,15 @@ export default function EditorPage() {
   const [processingMs, setProcessingMs] = useState<number | null>(null);
   const [modelDownloadPct, setModelDownloadPct] = useState<number | null>(null);
   const [clientProReady, setClientProReady] = useState(false);
+  const [cropOpen, setCropOpen] = useState(false);
   const newImageInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCropDone = useCallback((croppedBlob: Blob) => {
+    const url = URL.createObjectURL(croppedBlob);
+    setResultImage(url);
+    setCropOpen(false);
+    toast.success("Image cropped");
+  }, [setResultImage]);
 
   // Lift bg choice out of FinalEditor so we can apply it on download
   const [bgChoice, setBgChoice] = useState<BgChoice>({ mode: "transparent", color: "#ffffff", image: null });
@@ -467,6 +476,10 @@ export default function EditorPage() {
                     className="px-2.5 sm:px-3 py-1.5 rounded-full glass border border-[var(--glass-border)] text-[11px] sm:text-sm text-muted-foreground hover:text-foreground transition-all">
                     Compare
                   </button>
+                  <button onClick={() => setCropOpen(true)}
+                    className="px-2.5 sm:px-3 py-1.5 rounded-full glass border border-[var(--glass-border)] text-[11px] sm:text-sm text-muted-foreground hover:text-foreground transition-all">
+                    Crop
+                  </button>
                   <button onClick={handleDownload}
                     className="px-3 sm:px-4 py-1.5 rounded-full btn-gradient text-black text-[11px] sm:text-sm font-medium flex items-center gap-1.5">
                     <Download size={12} /> Download
@@ -558,6 +571,13 @@ export default function EditorPage() {
           )}
         </AnimatePresence>
       </div>
+      {/* ── CROP MODAL ── */}
+      <CropModal
+        imageUrl={resultImage || ""}
+        open={cropOpen}
+        onClose={() => setCropOpen(false)}
+        onCropDone={handleCropDone}
+      />
     </div>
   );
 }

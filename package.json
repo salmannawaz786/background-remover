@@ -19,6 +19,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-dropzone": "^14.3.5",
+    "react-easy-crop": "^6.2.2",
     "sonner": "^1.7.4",
     "zustand": "^5.0.3"
   },

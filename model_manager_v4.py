@@ -201,30 +201,34 @@ def _refine_mask(mask: np.ndarray) -> np.ndarray:
 
 
 def run_rvm(image: Image.Image, downsample_ratio: float = 1.0) -> Image.Image:
-    """Run RVM for person segmentation at 512px."""
+    """Run RVM for person segmentation at 1024px max dimension."""
     session = _get_rvm_session()
     W, H = image.size
-    target_size = 512
-    pil_proc = image.convert("RGB").resize((target_size, target_size), Image.BILINEAR)
+    max_dim = 1024
+    scale = min(max_dim / max(W, H), 1.0)
+    tw, th = int(W * scale), int(H * scale)
+
+    pil_proc = image.convert("RGB").resize((tw, th), Image.BILINEAR)
     arr = np.array(pil_proc, dtype=np.float32) / 255.0
     src = (arr - _MEAN) / _STD
     src = src.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
 
-    r1i = np.zeros((1, 16, target_size // 2, target_size // 2), dtype=np.float32)
-    r2i = np.zeros((1, 20, target_size // 4, target_size // 4), dtype=np.float32)
-    r3i = np.zeros((1, 40, target_size // 8, target_size // 8), dtype=np.float32)
-    r4i = np.zeros((1, 64, target_size // 16, target_size // 16), dtype=np.float32)
-    dsr = np.array([1.0], dtype=np.float32)
+    r1i = np.zeros((1, 16, th // 2, tw // 2), dtype=np.float32)
+    r2i = np.zeros((1, 20, th // 4, tw // 4), dtype=np.float32)
+    r3i = np.zeros((1, 40, th // 8, tw // 8), dtype=np.float32)
+    r4i = np.zeros((1, 64, th // 16, tw // 16), dtype=np.float32)
+    dsr_arr = np.array([downsample_ratio], dtype=np.float32)
 
     t0 = time.time()
-    outputs = session.run(None, {"src": src, "r1i": r1i, "r2i": r2i, "r3i": r3i, "r4i": r4i, "downsample_ratio": dsr})
+    outputs = session.run(None, {"src": src, "r1i": r1i, "r2i": r2i, "r3i": r3i, "r4i": r4i, "downsample_ratio": dsr_arr})
     pha = outputs[1]
-    logger.info(f"RVM inference ({target_size}x{target_size}): {time.time()-t0:.2f}s")
+    logger.info(f"RVM inference ({tw}x{th}, dsr={downsample_ratio}): {time.time()-t0:.2f}s")
 
     mask = pha[0, 0]
     mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
     mask = (mask * 255).clip(0, 255).astype(np.uint8)
     mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_CUBIC)
+    mask = _refine_mask(mask)
 
     result = image.convert("RGBA")
     result.putalpha(Image.fromarray(mask, "L"))
