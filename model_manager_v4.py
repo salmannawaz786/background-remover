@@ -200,31 +200,38 @@ def _refine_mask(mask: np.ndarray) -> np.ndarray:
     return mask
 
 
-def run_rvm(image: Image.Image, downsample_ratio: float = 1.0) -> Image.Image:
-    """Run RVM for person segmentation at 1024px."""
+def run_rvm(image: Image.Image) -> Image.Image:
+    """Run RVM for person segmentation at native resolution."""
     session = _get_rvm_session()
     W, H = image.size
-    target_size = 1024
-    pil_proc = image.convert("RGB").resize((target_size, target_size), Image.BILINEAR)
-    arr = np.array(pil_proc, dtype=np.float32) / 255.0
-    src = (arr - _MEAN) / _STD
-    src = src.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
 
-    r1i = np.zeros((1, 16, target_size // 2, target_size // 2), dtype=np.float32)
-    r2i = np.zeros((1, 20, target_size // 4, target_size // 4), dtype=np.float32)
-    r3i = np.zeros((1, 40, target_size // 8, target_size // 8), dtype=np.float32)
-    r4i = np.zeros((1, 64, target_size // 16, target_size // 16), dtype=np.float32)
-    dsr_arr = np.array([downsample_ratio], dtype=np.float32)
+    # Full-resolution input, no resize — RVM handles it natively
+    arr = np.array(image.convert("RGB"), dtype=np.float32) / 255.0
+    src = arr.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32)
+
+    # 1x1x1x1 states — RVM auto-scales them internally
+    r = np.zeros((1, 1, 1, 1), dtype=np.float32)
+
+    # Dynamic downsample ratio: caps internal processing at ~512px equivalent
+    ratio = min(1.0, 512 / max(H, W))
+    dsr = np.array([ratio], dtype=np.float32)
 
     t0 = time.time()
-    outputs = session.run(None, {"src": src, "r1i": r1i, "r2i": r2i, "r3i": r3i, "r4i": r4i, "downsample_ratio": dsr_arr})
+    outputs = session.run(None, {
+        "src": src, "r1i": r, "r2i": r, "r3i": r, "r4i": r,
+        "downsample_ratio": dsr,
+    })
     pha = outputs[1]
-    logger.info(f"RVM inference ({target_size}x{target_size}): {time.time()-t0:.2f}s")
+    logger.info(f"RVM inference ({W}x{H}, dsr={ratio:.3f}): {time.time()-t0:.2f}s")
 
-    mask = pha[0, 0]
-    mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
-    mask = (mask * 255).clip(0, 255).astype(np.uint8)
-    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_CUBIC)
+    mask = np.squeeze(pha)
+    mask = np.clip(mask, 0, 1)
+    mask = (mask * 255).astype(np.uint8)
+
+    # Safety resize if mask dimensions don't exactly match input
+    if mask.shape != (H, W):
+        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_CUBIC)
+
     mask = _refine_mask(mask)
 
     result = image.convert("RGBA")
