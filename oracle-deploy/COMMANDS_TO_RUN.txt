@@ -1,0 +1,98 @@
+# Commands to Run on Oracle Server (Copy and Paste)
+
+# ============================================
+# STEP 1: Stop Docker Build (if still running)
+# ============================================
+# Press Ctrl+C in the terminal where Docker is building
+
+
+# ============================================
+# STEP 2: Install Dependencies
+# ============================================
+
+cd /opt/bg-remover
+
+sudo apt-get update
+
+sudo apt-get install -y python3-pip python3-venv libgl1 libglib2.0-0
+
+python3 -m venv venv
+
+source venv/bin/activate
+
+pip install --upgrade pip
+
+pip install -r requirements.txt
+
+
+# ============================================
+# STEP 3: Configure Environment
+# ============================================
+
+cp oracle-deploy/.env.example .env
+
+nano .env
+# Add your Firebase and R2 credentials, then press Ctrl+O, Enter, Ctrl+X
+
+
+# ============================================
+# STEP 4: Start Server (Testing Mode)
+# ============================================
+
+source venv/bin/activate
+
+gunicorn --workers 3 --threads 2 --worker-class gthread --timeout 120 --bind 0.0.0.0:5000 server:app
+
+
+# ============================================
+# STEP 5: Test from Windows (New PowerShell)
+# ============================================
+# Run these on your Windows machine:
+
+curl http://141.253.199.23:5000/health
+
+curl http://141.253.199.23:5000/api/queue/stats
+
+
+# ============================================
+# STEP 6: Run in Background (After Testing)
+# ============================================
+
+# Install screen
+sudo apt-get install -y screen
+
+# Start screen session
+screen -S bg-remover
+
+# Run server
+cd /opt/bg-remover
+source venv/bin/activate
+gunicorn --workers 3 --threads 2 --worker-class gthread --timeout 120 --bind 0.0.0.0:5000 server:app
+
+# Detach from screen: Press Ctrl+A, then D
+
+
+# ============================================
+# Useful Commands
+# ============================================
+
+# Reattach to screen session (to see logs)
+screen -r bg-remover
+
+# List screen sessions
+screen -ls
+
+# Kill server process
+sudo lsof -ti:5000 | xargs sudo kill -9
+
+# Check if server is running
+curl http://localhost:5000/health
+
+# View last 50 lines of application log
+tail -50 app.log
+
+# Check memory usage
+free -h
+
+# Check disk space
+df -h

@@ -242,7 +242,7 @@ def get_authenticated_user_id():
                 request.user_email = decoded.get('email')
                 return decoded['uid'], decoded.get('email')
             except Exception as e:
-                logger.debug(f"Bearer token rejected: {e}")
+                logger.warning(f"Bearer token rejected: {e}")
 
     return None, None
 
@@ -442,11 +442,7 @@ def upload_image():
         file_size = file.tell()
         file.seek(0)
         
-        # Check authentication status (Flask session OR Bearer token)
-        user_id, _user_email = get_authenticated_user_id()
-        is_authenticated = user_id is not None
-        
-        # Model mode: 'fast' (Silueta) or 'pro' (BiRefNet .pt)
+        # Model mode: 'fast' or 'pro'
         model_mode = request.form.get('model', '').lower()
         if model_mode not in ('fast', 'pro'):
             # Backward compat: map old 'hd'/'best' to 'pro', others to 'fast'
@@ -454,6 +450,14 @@ def upload_image():
                 model_mode = 'pro'
             else:
                 model_mode = 'fast'
+
+        # Check authentication status (Flask session OR Bearer token)
+        user_id, _user_email = get_authenticated_user_id()
+        is_authenticated = user_id is not None
+        if is_authenticated:
+            logger.info(f"Authenticated request from user {user_id[:16]}... for model '{model_mode}'")
+        elif model_mode == 'pro':
+            logger.info(f"Unauthenticated pro request - will be rejected")
 
         # Pro mode requires authentication
         if model_mode == 'pro' and not is_authenticated:
