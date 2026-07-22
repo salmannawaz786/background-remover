@@ -178,11 +178,15 @@ try:
     logger.info(f"Available models: {list(available_models.keys())}")
     for mode, info in available_models.items():
         logger.info(f"  - {mode}: {info['name']} ({info.get('size_mb', 0):.1f}MB)")
-    # Load fast models synchronously so they're ready for first request
+    # Load fast models so they're ready for first request.
+    # U2Net-P is non-critical: if download fails, fast mode degrades to RVM-only.
     model_manager.load_rvm()
     logger.info("RVM (persons) loaded")
-    model_manager.load_u2netp()
-    logger.info("U2Net-P (fast objects) loaded")
+    try:
+        model_manager.load_u2netp()
+        logger.info("U2Net-P (fast objects) loaded")
+    except Exception as e:
+        logger.warning(f"U2Net-P preload failed (fast mode will use RVM only): {e}")
     # Pro model can load in background (only needed for pro requests)
     model_manager.preload_brefnet()
     logger.info("BREFNet Lite (pro) loading in background...")

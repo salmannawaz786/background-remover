@@ -45,7 +45,7 @@ RVM_CONFIG = {
 
 U2NETP_CONFIG = {
     'name': 'U2Net-P (fast objects)',
-    'url': 'https://huggingface.co/datasets/salmannawaz786/models/resolve/main/opt_u2netp.onnx',
+    'url': 'https://huggingface.co/salluu3432/bg-remover-models/resolve/main/opt_u2netp.onnx',
     'file': os.path.join(BASE_DIR, '.onnx_cache', 'opt_u2netp.onnx'),
     'input_size': 320,
     'input_name': 'input.1',
