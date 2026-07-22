@@ -9,6 +9,7 @@ importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.
 let rvmSession = null;
 let rmbgSession = null;
 let brefnetSession = null;
+let u2netpSession = null;
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/';
@@ -25,6 +26,9 @@ self.onmessage = async function(e) {
                 break;
             case 'runRMBG':
                 await handleRunRMBG(data, id);
+                break;
+            case 'runU2NetP':
+                await handleRunU2NetP(data, id);
                 break;
             case 'runBREFNet':
                 await handleRunBREFNet(data, id);
@@ -46,7 +50,52 @@ async function handleLoadModel(data, id) {
     if (modelType === 'rvm') rvmSession = session;
     else if (modelType === 'rmbg') rmbgSession = session;
     else if (modelType === 'brefnet') brefnetSession = session;
+    else if (modelType === 'u2netp') u2netpSession = session;
     self.postMessage({ id, success: true, modelType });
+}
+
+async function handleRunU2NetP(data, id) {
+    if (!u2netpSession) throw new Error('U2Net-P not loaded in worker');
+    const { imageData, width, height } = data;
+    const SIZE = 320;
+    const MEAN = [0.485, 0.456, 0.406];
+    const STD = [0.229, 0.224, 0.225];
+
+    const input = new Float32Array(3 * SIZE * SIZE);
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            const srcX = Math.min(width - 1, Math.floor(x * width / SIZE));
+            const srcY = Math.min(height - 1, Math.floor(y * height / SIZE));
+            const srcIdx = (srcY * width + srcX) * 4;
+            const dstIdx = y * SIZE + x;
+            input[dstIdx] = (imageData[srcIdx] / 255 - MEAN[0]) / STD[0];
+            input[SIZE * SIZE + dstIdx] = (imageData[srcIdx + 1] / 255 - MEAN[1]) / STD[1];
+            input[2 * SIZE * SIZE + dstIdx] = (imageData[srcIdx + 2] / 255 - MEAN[2]) / STD[2];
+        }
+    }
+
+    const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
+    const inputName = u2netpSession.inputNames[0];
+    const results = await u2netpSession.run({ [inputName]: inputTensor });
+    const outputName = u2netpSession.outputNames[0];
+    const mask = results[outputName].data;
+
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < mask.length; i++) {
+        if (mask[i] < min) min = mask[i];
+        if (mask[i] > max) max = mask[i];
+    }
+    const range = max - min || 1;
+
+    const alphaMask = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const srcX = Math.min(SIZE - 1, Math.floor(x * SIZE / width));
+            const srcY = Math.min(SIZE - 1, Math.floor(y * SIZE / height));
+            alphaMask[y * width + x] = (mask[srcY * SIZE + srcX] - min) / range;
+        }
+    }
+    self.postMessage({ id, alphaMask, width, height }, [alphaMask.buffer]);
 }
 
 async function handleRunRVM(data, id) {

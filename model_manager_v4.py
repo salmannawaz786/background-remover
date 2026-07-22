@@ -270,6 +270,7 @@ def run_u2netp(image: Image.Image) -> Image.Image:
 
     img = np.array(image.convert('RGB').resize((size, size), Image.BILINEAR), dtype=np.float32)
     img = img / 255.0
+    img = (img - _MEAN) / _STD
     tensor = np.ascontiguousarray(img.transpose(2, 0, 1)[np.newaxis])
 
     t0 = time.time()

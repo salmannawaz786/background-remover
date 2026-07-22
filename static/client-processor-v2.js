@@ -1,59 +1,56 @@
 /**
- * Client-Side Background Remover v3.0
+ * Client-Side Background Remover v4.0
  * ====================================
  * Smart routing:
- *   FAST mode: Person -> RVM, Object -> server (U2Net-P on server)
- *   PRO mode (PC): BREFNet Lite ONNX (98MB) client-side
- *   PRO mode (Mobile): RMBG-1.4 (42MB) client-side
- *   Fallback: always server
+ *   FAST mode: Person -> RVM (on-device), Object -> U2Net-P (on-device)
+ *   PRO mode (Desktop / GPU-capable phones): BREFNet Lite (on-device)
+ *   PRO mode (light phones): server
+ *   Fallback: always server until models are downloaded
  *
- * Model download happens in background after first pro request.
- * Uses Cache API for fast model storage and Web Workers for non-blocking inference.
+ * Models auto-download in the background on page load and persist
+ * forever via Cache API. Interrupted downloads resume on next visit.
  */
 
 const ClientProcessor = (() => {
-    const API_BASE = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
-        ? 'https://bgremover.sallulabs.com'
-        : 'http://localhost:5001';
-
     const MODELS = {
         rvm: {
             id: 'rvm-mobilenetv3',
             url: 'https://huggingface.co/eafish/web-onnx/resolve/main/rvm_mobilenetv3_fp32.onnx',
             size: 15
         },
-        rmbg: {
-            id: 'rmbg-1.4-quantized',
-            url: 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx',
-            size: 40
+        u2netp: {
+            id: 'u2netp-onnx',
+            url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx',
+            size: 4.5
         },
         brefnet: {
             id: 'brefnet-lite-fp16',
-            url: `${API_BASE}/models/model_fp16.onnx`,
+            url: 'https://huggingface.co/salluu3432/bg-remover-models/resolve/main/model_fp16.onnx',
             size: 98
         }
     };
 
-    const CACHE_NAME = 'bg-remover-models-v3';
+    const CACHE_NAME = 'bg-remover-models-v4';
 
     let _rvmSession = null;
-    let _rmbgSession = null;
+    let _u2netpSession = null;
     let _brefnetSession = null;
     let _rvmReady = false;
-    let _rmbgReady = false;
+    let _u2netpReady = false;
     let _brefnetReady = false;
     let _rvmDownloading = false;
-    let _rmbgDownloading = false;
+    let _u2netpDownloading = false;
     let _brefnetDownloading = false;
     let _faceDetector = null;
     let _faceDetectorSupported = false;
     let _deviceInfo = { capable: true, isMobile: false };
     let _initPromise = null;
+    let _autoDownloadStarted = false;
 
     let _worker = null;
     let _workerReady = false;
     let _workerHasRVM = false;
-    let _workerHasRMBG = false;
+    let _workerHasU2NetP = false;
     let _workerHasBREFNet = false;
     let _workerCallbacks = {};
     let _workerMessageId = 0;
@@ -76,7 +73,7 @@ const ClientProcessor = (() => {
                         else callback.resolve(data);
                     }
                 };
-                _worker.onerror = (e) => console.error('[Worker] Error:', e.message);
+                _worker.onerror = (e) => console.warn('[Worker] Error:', e.message);
                 _workerReady = true;
                 resolve();
             } catch (e) {
@@ -178,7 +175,7 @@ const ClientProcessor = (() => {
         return skinRatio > 0.12 && faceRegionRatio > 0.15;
     }
 
-    // ── Model Download ───────────────────────────────────────────────────────
+    // ── Model Download (with progress, cache, timeout) ──────────────────────
 
     async function downloadModel(modelKey, modelUrl, onProgress) {
         let arrayBuffer = await getCachedModel(modelKey);
@@ -188,7 +185,7 @@ const ClientProcessor = (() => {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000);
+        const timeoutId = setTimeout(() => controller.abort(), 600000);
 
         try {
             const response = await fetch(modelUrl, { signal: controller.signal });
@@ -200,7 +197,6 @@ const ClientProcessor = (() => {
             const reader = response.body.getReader();
             let received = 0;
             const chunks = [];
-            const startTime = Date.now();
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -208,7 +204,6 @@ const ClientProcessor = (() => {
                 chunks.push(value);
                 received += value.length;
                 if (onProgress && contentLength) onProgress(received / contentLength);
-                if (Date.now() - startTime > 600000) throw new Error('Download timeout');
             }
 
             arrayBuffer = new Uint8Array(received);
@@ -238,17 +233,29 @@ const ClientProcessor = (() => {
         });
     }
 
-    // ── RVM Inference ────────────────────────────────────────────────────────
+    // ── Shared canvas helper ─────────────────────────────────────────────────
 
-    async function runRVM(imageElement, downsampleRatio = 0.5) {
+    function imageToCanvas(imageElement, maxDim = 0) {
+        let W = imageElement.naturalWidth || imageElement.width;
+        let H = imageElement.naturalHeight || imageElement.height;
+        if (maxDim > 0 && Math.max(W, H) > maxDim) {
+            const scale = maxDim / Math.max(W, H);
+            W = Math.round(W * scale);
+            H = Math.round(H * scale);
+        }
         const canvas = document.createElement('canvas');
-        const W = imageElement.naturalWidth || imageElement.width;
-        const H = imageElement.naturalHeight || imageElement.height;
         canvas.width = W; canvas.height = H;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(imageElement, 0, 0, W, H);
-        const imageData = ctx.getImageData(0, 0, W, H);
+        return { canvas, ctx, W, H, imageData: ctx.getImageData(0, 0, W, H) };
+    }
+
+    // ── RVM Inference (persons) ──────────────────────────────────────────────
+
+    async function runRVM(imageElement) {
+        const { canvas, ctx, W, H, imageData } = imageToCanvas(imageElement);
         const data = imageData.data;
+        const downsampleRatio = Math.min(1.0, 512 / Math.max(H, W));
 
         let alphaMask;
         if (_workerReady && _worker && _workerHasRVM) {
@@ -274,53 +281,49 @@ const ClientProcessor = (() => {
         }
 
         for (let i = 0; i < H * W; i++) {
-            data[i * 4 + 3] = Math.round(alphaMask[i] * 255);
+            data[i * 4 + 3] = Math.round(Math.min(1, Math.max(0, alphaMask[i])) * 255);
         }
         ctx.putImageData(imageData, 0, 0);
         return canvas.toDataURL('image/png');
     }
 
-    // ── RMBG Inference ───────────────────────────────────────────────────────
+    // ── U2Net-P Inference (objects) ──────────────────────────────────────────
 
-    async function runRMBG(imageElement) {
-        const canvas = document.createElement('canvas');
-        const W = imageElement.naturalWidth || imageElement.width;
-        const H = imageElement.naturalHeight || imageElement.height;
-        canvas.width = W; canvas.height = H;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(imageElement, 0, 0, W, H);
-        const imageData = ctx.getImageData(0, 0, W, H);
+    async function runU2NetP(imageElement) {
+        const { canvas, ctx, W, H, imageData } = imageToCanvas(imageElement);
         const data = imageData.data;
 
         let alphaMask;
-        if (_workerReady && _worker && _workerHasRMBG) {
+        if (_workerReady && _worker && _workerHasU2NetP) {
             try {
-                const result = await postToWorker('runRMBG', { imageData: data, width: W, height: H });
+                const result = await postToWorker('runU2NetP', { imageData: data, width: W, height: H });
                 alphaMask = result.alphaMask;
             } catch (e) { alphaMask = null; }
         }
 
         if (!alphaMask) {
-            if (!_rmbgSession) throw new Error('RMBG not available');
-            const SIZE = 1024;
+            if (!_u2netpSession) throw new Error('U2Net-P not available');
+            const SIZE = 320;
+            const MEAN = [0.485, 0.456, 0.406];
+            const STD = [0.229, 0.224, 0.225];
+
             const resizeCanvas = document.createElement('canvas');
             resizeCanvas.width = SIZE; resizeCanvas.height = SIZE;
             const resizeCtx = resizeCanvas.getContext('2d');
             resizeCtx.drawImage(imageElement, 0, 0, SIZE, SIZE);
-            const resizedData = resizeCtx.getImageData(0, 0, SIZE, SIZE);
-            const pixels = resizedData.data;
+            const pixels = resizeCtx.getImageData(0, 0, SIZE, SIZE).data;
 
             const input = new Float32Array(3 * SIZE * SIZE);
             for (let i = 0; i < SIZE * SIZE; i++) {
-                input[i] = pixels[i * 4] / 255 - 0.5;
-                input[SIZE * SIZE + i] = pixels[i * 4 + 1] / 255 - 0.5;
-                input[2 * SIZE * SIZE + i] = pixels[i * 4 + 2] / 255 - 0.5;
+                input[i] = (pixels[i * 4] / 255 - MEAN[0]) / STD[0];
+                input[SIZE * SIZE + i] = (pixels[i * 4 + 1] / 255 - MEAN[1]) / STD[1];
+                input[2 * SIZE * SIZE + i] = (pixels[i * 4 + 2] / 255 - MEAN[2]) / STD[2];
             }
 
             const inputTensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
-            const inputName = _rmbgSession.inputNames[0];
-            const results = await _rmbgSession.run({ [inputName]: inputTensor });
-            const outputName = _rmbgSession.outputNames[0];
+            const inputName = _u2netpSession.inputNames[0];
+            const results = await _u2netpSession.run({ [inputName]: inputTensor });
+            const outputName = _u2netpSession.outputNames[0];
             const mask = results[outputName].data;
 
             let min = Infinity, max = -Infinity;
@@ -333,30 +336,24 @@ const ClientProcessor = (() => {
             alphaMask = new Float32Array(W * H);
             for (let y = 0; y < H; y++) {
                 for (let x = 0; x < W; x++) {
-                    const srcX = Math.floor(x * SIZE / W);
-                    const srcY = Math.floor(y * SIZE / H);
+                    const srcX = Math.min(SIZE - 1, Math.floor(x * SIZE / W));
+                    const srcY = Math.min(SIZE - 1, Math.floor(y * SIZE / H));
                     alphaMask[y * W + x] = (mask[srcY * SIZE + srcX] - min) / range;
                 }
             }
         }
 
         for (let i = 0; i < W * H; i++) {
-            data[i * 4 + 3] = Math.round(alphaMask[i] * 255);
+            data[i * 4 + 3] = Math.round(Math.min(1, Math.max(0, alphaMask[i])) * 255);
         }
         ctx.putImageData(imageData, 0, 0);
         return canvas.toDataURL('image/png');
     }
 
-    // ── BREFNet Inference (PC Pro) ───────────────────────────────────────────
+    // ── BREFNet Inference (pro) ──────────────────────────────────────────────
 
     async function runBREFNet(imageElement) {
-        const canvas = document.createElement('canvas');
-        const W = imageElement.naturalWidth || imageElement.width;
-        const H = imageElement.naturalHeight || imageElement.height;
-        canvas.width = W; canvas.height = H;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(imageElement, 0, 0, W, H);
-        const imageData = ctx.getImageData(0, 0, W, H);
+        const { canvas, ctx, W, H, imageData } = imageToCanvas(imageElement);
         const data = imageData.data;
 
         let alphaMask;
@@ -377,8 +374,7 @@ const ClientProcessor = (() => {
             resizeCanvas.width = SIZE; resizeCanvas.height = SIZE;
             const resizeCtx = resizeCanvas.getContext('2d');
             resizeCtx.drawImage(imageElement, 0, 0, SIZE, SIZE);
-            const resizedData = resizeCtx.getImageData(0, 0, SIZE, SIZE);
-            const pixels = resizedData.data;
+            const pixels = resizeCtx.getImageData(0, 0, SIZE, SIZE).data;
 
             const input = new Float32Array(3 * SIZE * SIZE);
             for (let i = 0; i < SIZE * SIZE; i++) {
@@ -394,8 +390,8 @@ const ClientProcessor = (() => {
             alphaMask = new Float32Array(W * H);
             for (let y = 0; y < H; y++) {
                 for (let x = 0; x < W; x++) {
-                    const srcX = Math.floor(x * SIZE / W);
-                    const srcY = Math.floor(y * SIZE / H);
+                    const srcX = Math.min(SIZE - 1, Math.floor(x * SIZE / W));
+                    const srcY = Math.min(SIZE - 1, Math.floor(y * SIZE / H));
                     const logit = raw[srcY * SIZE + srcX];
                     alphaMask[y * W + x] = 1 / (1 + Math.exp(-logit));
                 }
@@ -403,13 +399,13 @@ const ClientProcessor = (() => {
         }
 
         for (let i = 0; i < W * H; i++) {
-            data[i * 4 + 3] = Math.round(alphaMask[i] * 255);
+            data[i * 4 + 3] = Math.round(Math.min(1, Math.max(0, alphaMask[i])) * 255);
         }
         ctx.putImageData(imageData, 0, 0);
         return canvas.toDataURL('image/png');
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Device Detection ─────────────────────────────────────────────────────
 
     function isMobile() {
         return /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -434,19 +430,41 @@ const ClientProcessor = (() => {
         return _gpuCapable;
     }
 
+    // 'brefnet' = download pro model on device | 'server' = always use server for pro
     function getProModelForDevice() {
-        // Desktop, or any GPU-capable mobile device -> BREFNet Lite (best quality).
-        // Mobile without GPU support (e.g. budget Chinese phones) -> RMBG-1.4.
-        if (!isMobile()) return 'brefnet';
-        return detectGPUCapability() ? 'brefnet' : 'rmbg';
+        if (!isMobile()) return 'brefnet';            // Desktop: on-device BREFNet
+        return detectGPUCapability() ? 'brefnet' : 'server'; // Flagship phones: on-device; light phones: server
+    }
+
+    // ── Model Loaders ────────────────────────────────────────────────────────
+
+    async function loadModelGeneric(modelType, modelCfg, setReady, workerFlag) {
+        const modelBuffer = await downloadModel(modelCfg.id, modelCfg.url, null);
+        if (_workerReady && _worker) {
+            try {
+                await postToWorker('loadModel', { modelType, modelBuffer: modelBuffer.slice(0) });
+                if (modelType === 'rvm') _workerHasRVM = true;
+                else if (modelType === 'u2netp') _workerHasU2NetP = true;
+                else if (modelType === 'brefnet') _workerHasBREFNet = true;
+                setReady(true);
+                return;
+            } catch (e) {
+                console.warn(`[ClientAI] Worker ${modelType} load failed, using main thread:`, e.message);
+            }
+        }
+        const session = await createONNXSession(modelBuffer);
+        if (modelType === 'rvm') _rvmSession = session;
+        else if (modelType === 'u2netp') _u2netpSession = session;
+        else if (modelType === 'brefnet') _brefnetSession = session;
+        setReady(true);
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
 
     return {
         get isRVMReady() { return _rvmReady; },
+        get isU2NetPReady() { return _u2netpReady; },
         get isBREFNetReady() { return _brefnetReady; },
-        get isRMBGReady() { return _rmbgReady; },
         get deviceInfo() { return _deviceInfo; },
 
         set onProgress(fn) { _onProgressCallback = fn; },
@@ -462,135 +480,117 @@ const ClientProcessor = (() => {
                 const gpuCapable = mobile ? detectGPUCapability() : true;
                 const proModel = getProModelForDevice();
                 _deviceInfo = { capable: true, isMobile: mobile, gpuCapable, proModel, dtype: proModel === 'brefnet' ? 'fp16' : 'fp32' };
+
+                // Auto-start background downloads (resumes if interrupted)
+                this._startAutoDownload();
             })();
             return _initPromise;
         },
 
-        async loadBREFNet(onProgress) {
+        // Downloads run in background; Cache API persists them forever.
+        // If the tab closed mid-download, this restarts on next visit.
+        async _startAutoDownload() {
+            if (_autoDownloadStarted) return;
+            _autoDownloadStarted = true;
+            try {
+                // Fast models first (small): RVM for persons, U2Net-P for objects
+                if (!_rvmReady) {
+                    _rvmDownloading = true;
+                    loadModelGeneric('rvm', MODELS.rvm, (v) => { _rvmReady = v; })
+                        .catch((e) => console.warn('[ClientAI] RVM download failed:', e.message))
+                        .finally(() => { _rvmDownloading = false; });
+                }
+                if (!_u2netpReady) {
+                    _u2netpDownloading = true;
+                    loadModelGeneric('u2netp', MODELS.u2netp, (v) => { _u2netpReady = v; })
+                        .catch((e) => console.warn('[ClientAI] U2Net-P download failed:', e.message))
+                        .finally(() => { _u2netpDownloading = false; });
+                }
+                // Pro model only for capable devices (desktop / flagship phones)
+                if (getProModelForDevice() === 'brefnet' && !_brefnetReady) {
+                    _brefnetDownloading = true;
+                    loadModelGeneric('brefnet', MODELS.brefnet, (v) => { _brefnetReady = v; })
+                        .catch((e) => console.warn('[ClientAI] BREFNet download failed:', e.message))
+                        .finally(() => { _brefnetDownloading = false; });
+                }
+            } catch (e) { /* ignore */ }
+        },
+
+        isModelDownloading() {
+            return _brefnetDownloading || _rvmDownloading || _u2netpDownloading;
+        },
+
+        // Fast models (RVM person + U2Net-P object) ready = can process fast mode on device
+        isFastModelReady() {
+            return _rvmReady || _u2netpReady;
+        },
+
+        // Pro model ready (only on capable devices)
+        isModelReady() {
+            return getProModelForDevice() === 'brefnet' && _brefnetReady;
+        },
+
+        // Kept for backwards-compat with editor page
+        async downloadProModel(onProgress) {
+            if (getProModelForDevice() !== 'brefnet') return;
             if (_brefnetReady || _brefnetDownloading) return;
             _brefnetDownloading = true;
             try {
                 const modelBuffer = await downloadModel(MODELS.brefnet.id, MODELS.brefnet.url, onProgress);
                 if (_workerReady && _worker) {
                     try {
-                        await postToWorker('loadModel', { modelType: 'brefnet', modelBuffer });
+                        await postToWorker('loadModel', { modelType: 'brefnet', modelBuffer: modelBuffer.slice(0) });
                         _workerHasBREFNet = true;
-                    } catch (e) {
-                        console.warn('[ClientAI] Worker BREFNet load failed:', e.message);
-                    }
+                        _brefnetReady = true;
+                        return;
+                    } catch (e) { /* fall to main thread */ }
                 }
-                if (!_workerHasBREFNet) {
-                    _brefnetSession = await createONNXSession(modelBuffer);
-                }
+                _brefnetSession = await createONNXSession(modelBuffer);
                 _brefnetReady = true;
-            } catch (e) {
-                console.error('[ClientAI] BREFNet load FAILED:', e.message);
-                _brefnetReady = false;
             } finally {
                 _brefnetDownloading = false;
             }
         },
 
-        async loadRMBG(onProgress) {
-            if (_rmbgReady || _rmbgDownloading) return;
-            _rmbgDownloading = true;
-            try {
-                const modelBuffer = await downloadModel(MODELS.rmbg.id, MODELS.rmbg.url, onProgress);
-                if (_workerReady && _worker) {
-                    try {
-                        await postToWorker('loadModel', { modelType: 'rmbg', modelBuffer });
-                        _workerHasRMBG = true;
-                    } catch (e) {
-                        console.warn('[ClientAI] Worker RMBG load failed:', e.message);
-                    }
-                }
-                if (!_workerHasRMBG) {
-                    _rmbgSession = await createONNXSession(modelBuffer);
-                }
-                _rmbgReady = true;
-            } catch (e) {
-                console.error('[ClientAI] RMBG load FAILED:', e.message);
-                _rmbgReady = false;
-            } finally {
-                _rmbgDownloading = false;
-            }
-        },
-
-        async loadRVM(onProgress) {
-            if (_rvmReady || _rvmDownloading) return;
-            _rvmDownloading = true;
-            try {
-                const modelBuffer = await downloadModel(MODELS.rvm.id, MODELS.rvm.url, onProgress);
-                if (_workerReady && _worker) {
-                    try {
-                        await postToWorker('loadModel', { modelType: 'rvm', modelBuffer });
-                        _workerHasRVM = true;
-                    } catch (e) {
-                        console.warn('[ClientAI] Worker RVM load failed:', e.message);
-                    }
-                }
-                if (!_workerHasRVM) {
-                    _rvmSession = await createONNXSession(modelBuffer);
-                }
-                _rvmReady = true;
-            } catch (e) {
-                console.error('[ClientAI] RVM load FAILED:', e.message);
-                _rvmReady = false;
-            } finally {
-                _rvmDownloading = false;
-            }
-        },
-
-        isModelDownloading() {
-            return _brefnetDownloading || _rmbgDownloading;
-        },
-
-        isModelReady() {
-            const proModel = getProModelForDevice();
-            return proModel === 'brefnet' ? _brefnetReady : _rmbgReady;
-        },
-
-        async downloadProModel(onProgress) {
-            const proModel = getProModelForDevice();
-            if (proModel === 'brefnet') {
-                await this.loadBREFNet(onProgress);
-            } else {
-                await this.loadRMBG(onProgress);
-            }
-        },
-
         async processImage(imageElement, mode = 'fast') {
             if (mode === 'pro') {
-                const proModel = getProModelForDevice();
-                const isReady = proModel === 'brefnet' ? _brefnetReady : _rmbgReady;
-
-                if (isReady) {
-                    try {
-                        const result = proModel === 'brefnet'
-                            ? await runBREFNet(imageElement)
-                            : await runRMBG(imageElement);
-                        return { success: true, dataUrl: result, model: proModel, mode: 'pro' };
-                    } catch (e) {
-                        return { success: false, needsModel: proModel, mode: 'pro', error: e.message };
-                    }
-                } else {
-                    // Do NOT auto-trigger a download here — the caller decides when
-                    // it's appropriate to start pulling the model (only after the
-                    // user's first completed process). Until then, every pro
-                    // request falls through to the server.
-                    return { success: false, needsModel: proModel, mode: 'pro' };
+                if (getProModelForDevice() !== 'brefnet') {
+                    return { success: false, mode: 'pro', serverOnly: true };
                 }
-            } else {
-                return { success: false, mode: 'fast', serverOnly: true };
+                if (_brefnetReady) {
+                    try {
+                        const result = await runBREFNet(imageElement);
+                        return { success: true, dataUrl: result, model: 'brefnet', mode: 'pro' };
+                    } catch (e) {
+                        return { success: false, needsModel: 'brefnet', mode: 'pro', error: e.message };
+                    }
+                }
+                return { success: false, needsModel: 'brefnet', mode: 'pro' };
+            }
+
+            // FAST mode: person -> RVM, object -> U2Net-P (on-device when ready)
+            try {
+                const person = await detectPerson(imageElement);
+                if (person && _rvmReady) {
+                    const result = await runRVM(imageElement);
+                    return { success: true, dataUrl: result, model: 'rvm', mode: 'fast' };
+                }
+                if (!person && _u2netpReady) {
+                    const result = await runU2NetP(imageElement);
+                    return { success: true, dataUrl: result, model: 'u2netp', mode: 'fast' };
+                }
+                return { success: false, mode: 'fast', serverOnly: true, reason: person ? 'rvm_not_ready' : 'u2netp_not_ready' };
+            } catch (e) {
+                return { success: false, mode: 'fast', serverOnly: true, error: e.message };
             }
         },
 
         getStatus() {
             const proModel = getProModelForDevice();
             return {
-                rvm: { ready: _rvmReady, size: MODELS.rvm.size },
+                rvm: { ready: _rvmReady, downloading: _rvmDownloading, size: MODELS.rvm.size },
+                u2netp: { ready: _u2netpReady, downloading: _u2netpDownloading, size: MODELS.u2netp.size },
                 brefnet: { ready: _brefnetReady, downloading: _brefnetDownloading, size: MODELS.brefnet.size },
-                rmbg: { ready: _rmbgReady, downloading: _rmbgDownloading, size: MODELS.rmbg.size },
                 activeProModel: proModel,
                 gpuCapable: _deviceInfo.gpuCapable
             };

@@ -110,22 +110,15 @@ export async function removeBackgroundClient(
     const w = window as unknown as Record<string, unknown>;
     const processor = w.ClientProcessor as {
       init: () => Promise<void>;
-      processImage: (img: HTMLImageElement, mode: string) => Promise<{ success: boolean; dataUrl?: string; model?: string; mode?: string; error?: string }>;
+      processImage: (img: HTMLImageElement, mode: string) => Promise<{ success: boolean; dataUrl?: string; model?: string; mode?: string; error?: string; serverOnly?: boolean }>;
       isModelReady: () => boolean;
+      isFastModelReady: () => boolean;
       isMobile: () => boolean;
     } | undefined;
 
     if (!processor) return { ok: false, error: "Client processor not loaded" };
 
     await processor.init();
-
-    if (model === "fast") {
-      return { ok: false, error: "fast_server_only" };
-    }
-
-    if (!processor.isModelReady()) {
-      return { ok: false, error: "model_not_ready" };
-    }
 
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -144,7 +137,7 @@ export async function removeBackgroundClient(
       return { ok: true, blob, usedClientSide: true };
     }
 
-    return { ok: false, error: result.error || "client_processing_failed" };
+    return { ok: false, error: result.error || (result.serverOnly ? "server_only" : "client_processing_failed") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Client processing error" };
   }

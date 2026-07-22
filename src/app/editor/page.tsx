@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Script from "next/script";
 import { ArrowLeft, Download, Sun, Moon, Wand2, ImagePlus, Layers, Smartphone, Clipboard, X, Clock, CheckCircle2, MoreVertical } from "lucide-react";
 import { useStore } from "@/lib/store";
-import { removeBackground, removeBackgroundClient, downloadProModel, type BgModel, type BgFormat } from "@/lib/api";
+import { removeBackground, removeBackgroundClient, type BgModel, type BgFormat } from "@/lib/api";
 import { toast } from "sonner";
 import Image from "next/image";
 import { isPWA } from "@/lib/pwa-utils";
@@ -34,7 +34,9 @@ export default function EditorPage() {
   const [processingMs, setProcessingMs] = useState<number | null>(null);
   const [modelDownloadPct, setModelDownloadPct] = useState<number | null>(null);
   const [clientProReady, setClientProReady] = useState(false);
+  const [clientFastReady, setClientFastReady] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
+  const [downloadQuality, setDownloadQuality] = useState<"standard" | "full">("standard");
   const newImageInputRef = useRef<HTMLInputElement>(null);
 
   const BORDER_PRESETS = [
@@ -108,52 +110,52 @@ export default function EditorPage() {
     setMobileMenuOpen(false);
   };
 
-  // On mount, just check whether the on-device pro model is already cached
-  // from a previous visit — never download proactively here.
+  // On mount, start checking model status. The ClientProcessor auto-downloads
+  // models in the background on init (Cache API persists them forever).
   useEffect(() => {
     if (typeof window === "undefined") return;
-    (async () => {
+    let alive = true;
+    const poll = async () => {
       try {
-        const { isClientProModelReady } = await import("@/lib/api");
-        if (isClientProModelReady()) setClientProReady(true);
-      } catch {
-        /* ignore */
-      }
-    })();
+        const w = window as unknown as { ClientProcessor?: { init: () => Promise<void>; isModelReady: () => boolean; isFastModelReady: () => boolean; isModelDownloading: () => boolean } };
+        if (!w.ClientProcessor) return;
+        await w.ClientProcessor.init();
+        if (!alive) return;
+        if (w.ClientProcessor.isModelReady()) setClientProReady(true);
+        if (w.ClientProcessor.isFastModelReady()) setClientFastReady(true);
+        if (!w.ClientProcessor.isModelReady() || !w.ClientProcessor.isFastModelReady()) {
+          setTimeout(poll, 3000);
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    return () => { alive = false; };
   }, []);
 
-  // Kick off all on-device model downloads in the background after the
-  // user's first completed process. Every request before models are ready
-  // is guaranteed to hit the server. Downloads persist via Cache API.
-  const maybeStartBackgroundModelDownload = useCallback(async () => {
-    if (typeof window === "undefined") return;
-    const FLAG = "bgr_first_process_done";
-    const { downloadProModel, isClientProModelReady } = await import("@/lib/api");
-
-    // If already ready, nothing to download
-    if (isClientProModelReady()) {
-      setClientProReady(true);
-      localStorage.setItem(FLAG, "1");
-      return;
+  // Downscale image before processing — all models compute masks at ≤1024px
+  // internally, so 1600px input loses almost nothing but uploads/transfers ~10x faster.
+  const downscaleImage = useCallback(async (blob: Blob, maxDim: number): Promise<Blob> => {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new window.Image();
+      img.src = url;
+      await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error("img load")); });
+      const W = img.naturalWidth, H = img.naturalHeight;
+      if (Math.max(W, H) <= maxDim) return blob;
+      const scale = maxDim / Math.max(W, H);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(W * scale);
+      canvas.height = Math.round(H * scale);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return blob;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const out = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.92));
+      return out ?? blob;
+    } catch {
+      return blob;
+    } finally {
+      URL.revokeObjectURL(url);
     }
-
-    // If already triggered before, check if model actually cached
-    if (localStorage.getItem(FLAG)) {
-      return; // download already in progress or completed
-    }
-
-    localStorage.setItem(FLAG, "1");
-
-    // Download pro model (and implicitly fast models) in background
-    downloadProModel((pct) => {
-      setModelDownloadPct(Math.round(pct * 100));
-    }).then(() => {
-      setClientProReady(true);
-      setModelDownloadPct(null);
-    }).catch(() => {
-      localStorage.removeItem(FLAG); // allow retry on next visit
-      setModelDownloadPct(null);
-    });
   }, []);
 
   const handleNewImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -184,30 +186,29 @@ export default function EditorPage() {
     const startedAt = performance.now();
 
     try {
-      let imageBlob: Blob;
+      let rawBlob: Blob;
       if (uploadedFile) {
-        imageBlob = uploadedFile;
+        rawBlob = uploadedFile;
       } else {
         const res = await fetch(uploadedImage!);
-        imageBlob = await res.blob();
+        rawBlob = await res.blob();
       }
+
+      // Downscale to 1600px max before processing — huge speed win on mobile
+      // (all models compute masks at ≤1024px internally anyway).
+      const imageBlob = await downscaleImage(rawBlob, 1600);
 
       const fingerprint = (window as { userFingerprint?: string }).userFingerprint ?? "";
 
       let result;
 
-      // Pro mode: try client-side processing first (BREFNet on PC, RMBG on mobile)
-      if (selectedModel === "pro") {
-        const clientResult = await removeBackgroundClient(imageBlob, "pro");
-        if (clientResult.ok && clientResult.blob) {
-          result = clientResult;
-        } else {
-          // Client-side failed or model not ready — fall back to server
-          result = await removeBackground(imageBlob, "pro", outputFormat, fingerprint);
-        }
+      // Try on-device processing first (both fast and pro) — instant, no network.
+      // Falls back to server until models finish downloading in the background.
+      const clientResult = await removeBackgroundClient(imageBlob, selectedModel);
+      if (clientResult.ok && clientResult.blob) {
+        result = clientResult;
       } else {
-        // Fast mode: always server (U2Net-P / RVM on server)
-        result = await removeBackground(imageBlob, "fast", outputFormat, fingerprint);
+        result = await removeBackground(imageBlob, selectedModel, outputFormat, fingerprint);
       }
 
       if (!result.ok) {
@@ -236,8 +237,6 @@ export default function EditorPage() {
       setProcessingMs(totalMs);
       const location = result.usedClientSide ? " (on-device)" : "";
       toast.success(`Background removed!${location}`);
-
-      void maybeStartBackgroundModelDownload();
     } catch (err) {
       console.error("Processing error:", err);
       const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
@@ -253,64 +252,87 @@ export default function EditorPage() {
     const mime = outputFormat === "png" ? "image/png" : "image/webp";
 
     const choice = finalEditorRef.current?.getBg() ?? bgChoice;
-    const needsComposite = choice.mode === "color" || (choice.mode === "image" && !!choice.image) || !!borderColor;
 
-    const img = new window.Image();
-    img.crossOrigin = "anonymous";
-    img.src = resultImage;
-    await new Promise<void>((res, rej) => {
-      img.onload = () => res();
-      img.onerror = () => rej(new Error("Failed to load result image"));
+    const loadImg = (src: string) => new Promise<HTMLImageElement>((res, rej) => {
+      const i = new window.Image();
+      i.crossOrigin = "anonymous";
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error("Failed to load image"));
+      i.src = src;
     });
 
-    const bw = borderColor ? Math.round(borderWidth * Math.max(img.naturalWidth, img.naturalHeight) / 1024) : 0;
-    const canvasW = img.naturalWidth + bw * 2;
-    const canvasH = img.naturalHeight + bw * 2;
+    try {
+      const resImg = await loadImg(resultImage);
 
-    const canvas = document.createElement("canvas");
-    canvas.width = canvasW;
-    canvas.height = canvasH;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { toast.error("Canvas not supported"); return; }
+      // Base RGBA: processed result, or full-res original with result's alpha
+      // (remove.bg-style "full quality" download — edges stay at mask resolution
+      // but colors/detail stay at original resolution)
+      const base = document.createElement("canvas");
+      const bctx = base.getContext("2d");
+      if (!bctx) { toast.error("Canvas not supported"); return; }
 
-    if (borderColor) {
-      ctx.fillStyle = borderColor;
-      ctx.fillRect(0, 0, canvasW, canvasH);
-    }
+      if (downloadQuality === "full" && uploadedImage) {
+        const origImg = await loadImg(uploadedImage);
+        base.width = origImg.naturalWidth;
+        base.height = origImg.naturalHeight;
+        bctx.drawImage(origImg, 0, 0);
+        bctx.globalCompositeOperation = "destination-in";
+        bctx.drawImage(resImg, 0, 0, base.width, base.height);
+        bctx.globalCompositeOperation = "source-over";
+      } else {
+        base.width = resImg.naturalWidth;
+        base.height = resImg.naturalHeight;
+        bctx.drawImage(resImg, 0, 0);
+      }
 
-    if (choice.mode === "color") {
-      ctx.fillStyle = choice.color;
-      ctx.fillRect(bw, bw, img.naturalWidth, img.naturalHeight);
-    } else if (choice.mode === "image" && choice.image) {
-      const bg = new window.Image();
-      bg.crossOrigin = "anonymous";
-      bg.src = choice.image;
-      await new Promise<void>((res, rej) => {
-        bg.onload = () => res();
-        bg.onerror = () => rej(new Error("Failed to load background image"));
+      const imgW = base.width, imgH = base.height;
+      const bw = borderColor ? Math.round(borderWidth * Math.max(imgW, imgH) / 1024) : 0;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = imgW + bw * 2;
+      canvas.height = imgH + bw * 2;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { toast.error("Canvas not supported"); return; }
+
+      if (borderColor) {
+        ctx.fillStyle = borderColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      if (choice.mode === "color") {
+        ctx.fillStyle = choice.color;
+        ctx.fillRect(bw, bw, imgW, imgH);
+      } else if (choice.mode === "image" && choice.image) {
+        const bg = await loadImg(choice.image);
+        const scale = Math.max(imgW / bg.naturalWidth, imgH / bg.naturalHeight);
+        const w = bg.naturalWidth * scale;
+        const h = bg.naturalHeight * scale;
+        ctx.drawImage(bg, bw + (imgW - w) / 2, bw + (imgH - h) / 2, w, h);
+      }
+
+      ctx.drawImage(base, bw, bw);
+
+      const blob: Blob = await new Promise((res, rej) => {
+        canvas.toBlob(
+          (b) => (b ? res(b) : rej(new Error("toBlob failed"))),
+          mime,
+          outputFormat === "webp" ? 0.95 : undefined
+        );
       });
-      const scale = Math.max(img.naturalWidth / bg.naturalWidth, img.naturalHeight / bg.naturalHeight);
-      const w = bg.naturalWidth * scale;
-      const h = bg.naturalHeight * scale;
-      ctx.drawImage(bg, bw + (img.naturalWidth - w) / 2, bw + (img.naturalHeight - h) / 2, w, h);
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sallulabs-bg-removed.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error("Download error:", err);
+      const a = document.createElement("a");
+      a.href = resultImage;
+      a.download = `sallulabs-bg-removed.${ext}`;
+      a.click();
     }
-
-    ctx.drawImage(img, bw, bw);
-
-    const blob: Blob = await new Promise((res, rej) => {
-      canvas.toBlob(
-        (b) => (b ? res(b) : rej(new Error("toBlob failed"))),
-        mime,
-        outputFormat === "webp" ? 0.95 : undefined
-      );
-    });
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `sallulabs-bg-removed.${ext}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handleDownload = () => {
@@ -484,7 +506,20 @@ export default function EditorPage() {
                     </span>
                   )}
                 </div>
-                <div className="flex gap-1.5 sm:gap-2">
+                <div className="flex gap-1.5 sm:gap-2 items-center">
+                  {/* Quality selector */}
+                  <div className="flex items-center gap-0.5 p-0.5 glass rounded-full border border-[var(--glass-border)]">
+                    <button onClick={() => setDownloadQuality("standard")}
+                      className={`px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium transition-all ${downloadQuality === "standard" ? "btn-gradient text-black" : "text-muted-foreground hover:text-foreground"}`}
+                      title="Processed size — smaller file, faster">
+                      Standard
+                    </button>
+                    <button onClick={() => setDownloadQuality("full")}
+                      className={`px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium transition-all ${downloadQuality === "full" ? "btn-gradient text-black" : "text-muted-foreground hover:text-foreground"}`}
+                      title="Original resolution — full detail (HD)">
+                      Full HD
+                    </button>
+                  </div>
                   <button onClick={() => { setResultImage(null); setProcessingMs(null); }}
                     className="px-2.5 sm:px-3 py-1.5 rounded-full glass border border-[var(--glass-border)] text-[11px] sm:text-sm text-muted-foreground hover:text-foreground transition-all">
                     Compare
@@ -598,12 +633,12 @@ export default function EditorPage() {
 
               {/* Bottom bar: actions */}
               <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                {/* Pro mode hint - hidden on smallest screens */}
-                {selectedModel === "pro" && (
-                  <span className="hidden lg:block text-xs text-muted-foreground">
-                    {clientProReady ? "Pro — on-device AI (no server needed)" : modelDownloadPct ? `Pro — downloading model (${modelDownloadPct}%)` : "Pro — higher quality (sign-in required)"}
-                  </span>
-                )}
+                {/* Mode status hint - hidden on smallest screens */}
+                <span className="hidden lg:block text-xs text-muted-foreground">
+                  {selectedModel === "pro"
+                    ? (clientProReady ? "Pro — on-device AI (no server needed)" : "Pro — higher quality (server until model downloads)")
+                    : (clientFastReady ? "Fast — on-device AI (instant)" : "Fast — downloading on-device models…")}
+                </span>
 
                 <button
                   onClick={handleProcess}
