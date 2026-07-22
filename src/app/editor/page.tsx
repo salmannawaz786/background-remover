@@ -36,7 +36,9 @@ export default function EditorPage() {
   const [clientProReady, setClientProReady] = useState(false);
   const [clientFastReady, setClientFastReady] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
-  const [downloadQuality, setDownloadQuality] = useState<"standard" | "full">("standard");
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [upscaling, setUpscaling] = useState(false);
+  const [upscalePct, setUpscalePct] = useState<number | null>(null);
   const newImageInputRef = useRef<HTMLInputElement>(null);
 
   const BORDER_PRESETS = [
@@ -194,9 +196,10 @@ export default function EditorPage() {
         rawBlob = await res.blob();
       }
 
-      // Downscale to 1600px max before processing — huge speed win on mobile
-      // (all models compute masks at ≤1024px internally anyway).
-      const imageBlob = await downscaleImage(rawBlob, 1600);
+      // Downscale to 1280px max before processing — huge speed win on mobile
+      // (all models compute masks at ≤1024px internally anyway). Full-res
+      // output stays available via Full HD / AI Upscale at download time.
+      const imageBlob = await downscaleImage(rawBlob, 1280);
 
       const fingerprint = (window as { userFingerprint?: string }).userFingerprint ?? "";
 
@@ -246,8 +249,9 @@ export default function EditorPage() {
     }
   };
 
-  const compositeAndDownload = async (): Promise<void> => {
-    if (!resultImage) return;
+  const compositeAndDownload = async (quality: "standard" | "full" = "standard", sourceUrl?: string): Promise<void> => {
+    const resultSrc = sourceUrl ?? resultImage;
+    if (!resultSrc) return;
     const ext = outputFormat === "png" ? "png" : "webp";
     const mime = outputFormat === "png" ? "image/png" : "image/webp";
 
@@ -262,7 +266,7 @@ export default function EditorPage() {
     });
 
     try {
-      const resImg = await loadImg(resultImage);
+      const resImg = await loadImg(resultSrc);
 
       // Base RGBA: processed result, or full-res original with result's alpha
       // (remove.bg-style "full quality" download — edges stay at mask resolution
@@ -271,7 +275,7 @@ export default function EditorPage() {
       const bctx = base.getContext("2d");
       if (!bctx) { toast.error("Canvas not supported"); return; }
 
-      if (downloadQuality === "full" && uploadedImage) {
+      if (quality === "full" && uploadedImage && !sourceUrl) {
         const origImg = await loadImg(uploadedImage);
         base.width = origImg.naturalWidth;
         base.height = origImg.naturalHeight;
@@ -329,14 +333,117 @@ export default function EditorPage() {
     } catch (err) {
       console.error("Download error:", err);
       const a = document.createElement("a");
-      a.href = resultImage;
+      a.href = resultSrc;
       a.download = `sallulabs-bg-removed.${ext}`;
       a.click();
     }
   };
 
+  // AI 4x upscale via Real-ESRGAN — on-device if possible, server as fallback.
+  // Handles transparency: RGB goes through the model, alpha upscaled separately.
+  const handleAIUpscale = async () => {
+    if (!resultImage) return;
+    setUpscaling(true);
+    setUpscalePct(null);
+    try {
+      const resBlob = await (await fetch(resultImage)).blob();
+      const resImg = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new window.Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("load fail"));
+        i.src = resultImage;
+      });
+
+      // Split RGB and alpha
+      const W = resImg.naturalWidth, H = resImg.naturalHeight;
+      const rgbCanvas = document.createElement("canvas");
+      rgbCanvas.width = W; rgbCanvas.height = H;
+      const rgbCtx = rgbCanvas.getContext("2d")!;
+      rgbCtx.fillStyle = "#ffffff";
+      rgbCtx.fillRect(0, 0, W, H);
+      rgbCtx.drawImage(resImg, 0, 0);
+
+      let upscaledRgbUrl: string | null = null;
+
+      // Try on-device Real-ESRGAN first
+      try {
+        const w = window as unknown as { ClientProcessor?: {
+          init: () => Promise<void>;
+          isUpscaleReady: () => boolean;
+          loadUpscaleModel: (cb?: (pct: number) => void) => Promise<void>;
+          upscaleImage: (img: HTMLImageElement) => Promise<string>;
+        }};
+        if (w.ClientProcessor) {
+          await w.ClientProcessor.init();
+          if (!w.ClientProcessor.isUpscaleReady()) {
+            toast.info("Downloading AI upscale model (4MB, one-time)…");
+            await w.ClientProcessor.loadUpscaleModel((pct) => setUpscalePct(Math.round(pct * 100)));
+          }
+          toast.info("AI upscaling on your device…");
+          const rgbImg = await new Promise<HTMLImageElement>((res, rej) => {
+            const i = new window.Image();
+            i.onload = () => res(i);
+            i.onerror = () => rej(new Error("rgb load fail"));
+            i.src = rgbCanvas.toDataURL("image/png");
+          });
+          upscaledRgbUrl = await w.ClientProcessor.upscaleImage(rgbImg);
+        }
+      } catch (e) {
+        console.warn("On-device upscale failed, trying server:", e);
+      }
+
+      // Fallback: server-side upscale (RGB only)
+      if (!upscaledRgbUrl) {
+        toast.info("AI upscaling on server…");
+        const rgbBlob = await new Promise<Blob | null>((res) => rgbCanvas.toBlob(res, "image/png"));
+        if (!rgbBlob) throw new Error("rgb blob fail");
+        const { upscaleImageServer } = await import("@/lib/api");
+        const upBlob = await upscaleImageServer(rgbBlob);
+        if (!upBlob) throw new Error("server upscale failed");
+        upscaledRgbUrl = URL.createObjectURL(upBlob);
+      }
+
+      // Load upscaled RGB, upscale alpha 4x with canvas, merge
+      const upImg = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new window.Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("up load fail"));
+        i.src = upscaledRgbUrl!;
+      });
+
+      const outW = upImg.naturalWidth, outH = upImg.naturalHeight;
+      const merged = document.createElement("canvas");
+      merged.width = outW; merged.height = outH;
+      const mctx = merged.getContext("2d")!;
+      mctx.drawImage(upImg, 0, 0);
+
+      // Alpha: draw original result scaled to output size, keep only its alpha
+      const alphaCanvas = document.createElement("canvas");
+      alphaCanvas.width = outW; alphaCanvas.height = outH;
+      const actx = alphaCanvas.getContext("2d")!;
+      actx.drawImage(resImg, 0, 0, outW, outH);
+      const alphaData = actx.getImageData(0, 0, outW, outH);
+      const mergedData = mctx.getImageData(0, 0, outW, outH);
+      for (let i = 0; i < outW * outH; i++) {
+        mergedData.data[i * 4 + 3] = alphaData.data[i * 4 + 3];
+      }
+      mctx.putImageData(mergedData, 0, 0);
+
+      const finalUrl = merged.toDataURL("image/png");
+      await compositeAndDownload("standard", finalUrl);
+      setDownloadModalOpen(false);
+      toast.success("AI upscale complete!");
+    } catch (err) {
+      console.error("AI upscale error:", err);
+      toast.error("AI upscale failed. Try Standard or Full HD instead.");
+    } finally {
+      setUpscaling(false);
+      setUpscalePct(null);
+    }
+  };
+
   const handleDownload = () => {
-    void compositeAndDownload();
+    setDownloadModalOpen(true);
   };
 
   const formatMs = (ms: number) =>
@@ -507,19 +614,6 @@ export default function EditorPage() {
                   )}
                 </div>
                 <div className="flex gap-1.5 sm:gap-2 items-center">
-                  {/* Quality selector */}
-                  <div className="flex items-center gap-0.5 p-0.5 glass rounded-full border border-[var(--glass-border)]">
-                    <button onClick={() => setDownloadQuality("standard")}
-                      className={`px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium transition-all ${downloadQuality === "standard" ? "btn-gradient text-black" : "text-muted-foreground hover:text-foreground"}`}
-                      title="Processed size — smaller file, faster">
-                      Standard
-                    </button>
-                    <button onClick={() => setDownloadQuality("full")}
-                      className={`px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium transition-all ${downloadQuality === "full" ? "btn-gradient text-black" : "text-muted-foreground hover:text-foreground"}`}
-                      title="Original resolution — full detail (HD)">
-                      Full HD
-                    </button>
-                  </div>
                   <button onClick={() => { setResultImage(null); setProcessingMs(null); }}
                     className="px-2.5 sm:px-3 py-1.5 rounded-full glass border border-[var(--glass-border)] text-[11px] sm:text-sm text-muted-foreground hover:text-foreground transition-all">
                     Compare
@@ -528,7 +622,7 @@ export default function EditorPage() {
                     className="px-2.5 sm:px-3 py-1.5 rounded-full glass border border-[var(--glass-border)] text-[11px] sm:text-sm text-muted-foreground hover:text-foreground transition-all">
                     Crop
                   </button>
-                  <button onClick={handleDownload}
+                  <button onClick={() => setDownloadModalOpen(true)}
                     className="px-3 sm:px-4 py-1.5 rounded-full btn-gradient text-black text-[11px] sm:text-sm font-medium flex items-center gap-1.5">
                     <Download size={12} /> Download
                   </button>
@@ -661,6 +755,75 @@ export default function EditorPage() {
         onClose={() => setCropOpen(false)}
         onCropDone={handleCropDone}
       />
+
+      {/* ── DOWNLOAD QUALITY MODAL ── */}
+      <AnimatePresence>
+        {downloadModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => !upscaling && setDownloadModalOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-sm glass rounded-3xl border border-[var(--glass-border)] p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-sm font-semibold text-foreground mb-1">Download Quality</h3>
+              <p className="text-xs text-muted-foreground mb-4">Choose how you want your image.</p>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  disabled={upscaling}
+                  onClick={() => { setDownloadModalOpen(false); void compositeAndDownload("standard"); }}
+                  className="w-full text-left px-4 py-3 rounded-2xl glass border border-[var(--glass-border)] hover:border-primary/50 transition-all disabled:opacity-50"
+                >
+                  <div className="text-sm font-medium text-foreground">Standard</div>
+                  <div className="text-[11px] text-muted-foreground">Processed size — instant, small file</div>
+                </button>
+
+                <button
+                  disabled={upscaling}
+                  onClick={() => { setDownloadModalOpen(false); void compositeAndDownload("full"); }}
+                  className="w-full text-left px-4 py-3 rounded-2xl glass border border-[var(--glass-border)] hover:border-primary/50 transition-all disabled:opacity-50"
+                >
+                  <div className="text-sm font-medium text-foreground">Full HD</div>
+                  <div className="text-[11px] text-muted-foreground">Original resolution — instant, real detail</div>
+                </button>
+
+                <button
+                  disabled={upscaling}
+                  onClick={() => { void handleAIUpscale(); }}
+                  className="w-full text-left px-4 py-3 rounded-2xl glass border border-primary/30 hover:border-primary/60 transition-all disabled:opacity-50"
+                >
+                  <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    AI 4x Upscale
+                    <span className="text-[9px] font-bold bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">PRO</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {upscaling
+                      ? (upscalePct !== null ? `Downloading model… ${upscalePct}%` : "Upscaling… this may take 30-60s")
+                      : "Real-ESRGAN AI enhancement — slower, max sharpness"}
+                  </div>
+                </button>
+              </div>
+
+              {!upscaling && (
+                <button
+                  onClick={() => setDownloadModalOpen(false)}
+                  className="w-full mt-3 px-4 py-2 rounded-full text-xs text-muted-foreground hover:text-foreground transition-all"
+                >
+                  Cancel
+                </button>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

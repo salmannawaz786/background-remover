@@ -26,9 +26,11 @@ logger = logging.getLogger(__name__)
 _rvm_session = None
 _u2netp_session = None
 _brefnet_session = None
+_realesr_session = None
 _rvm_lock = threading.Lock()
 _u2netp_lock = threading.Lock()
 _brefnet_lock = threading.Lock()
+_realesr_lock = threading.Lock()
 _face_lock = threading.Lock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +60,14 @@ BREFNET_CONFIG = {
     'output_name': 'output_image',
     'input_size': 512,
     'size_mb': 98,
+}
+
+REALESR_CONFIG = {
+    'name': 'Real-ESRGAN x4 (SRVGGNetCompact)',
+    'url': 'https://huggingface.co/salluu3432/bg-remover-models/resolve/main/realesr_x4.onnx',
+    'file': os.path.join(BASE_DIR, 'realesr_x4.onnx'),
+    'max_input': 256,  # cap input side; output = 4x (max ~1024px)
+    'size_mb': 4.6,
 }
 
 # ImageNet normalization constants
@@ -350,6 +360,43 @@ def run_brefnet(image: Image.Image) -> Image.Image:
     result = image.convert("RGBA")
     result.putalpha(Image.fromarray(mask, "L"))
     return result
+
+
+# ── Real-ESRGAN x4 Upscaler ─────────────────────────────────────────────────
+
+def _get_realesr_session():
+    global _realesr_session
+    if _realesr_session is not None:
+        return _realesr_session
+    with _realesr_lock:
+        if _realesr_session is not None:
+            return _realesr_session
+        if not _download_model(REALESR_CONFIG['url'], REALESR_CONFIG['file'], 'Real-ESRGAN'):
+            raise RuntimeError("Failed to download Real-ESRGAN model")
+        import onnxruntime as ort
+        t0 = time.time()
+        _realesr_session = ort.InferenceSession(REALESR_CONFIG['file'], providers=['CPUExecutionProvider'])
+        logger.info(f"Real-ESRGAN loaded in {time.time()-t0:.2f}s")
+    return _realesr_session
+
+
+def upscale_image(image: Image.Image) -> Image.Image:
+    """Upscale image 4x with Real-ESRGAN (input capped at 256px -> max 1024px out)."""
+    session = _get_realesr_session()
+    W, H = image.size
+    max_in = REALESR_CONFIG['max_input']
+    scale = min(max_in / max(W, H), 1.0)
+    tw, th = max(1, int(W * scale)), max(1, int(H * scale))
+
+    arr = np.array(image.convert('RGB').resize((tw, th), Image.BILINEAR), dtype=np.float32) / 255.0
+    tensor = arr.transpose(2, 0, 1)[np.newaxis].astype(np.float32)
+
+    t0 = time.time()
+    out = session.run(None, {session.get_inputs()[0].name: tensor})[0]
+    logger.info(f"Real-ESRGAN upscale ({tw}x{th} -> {out.shape[3]}x{out.shape[2]}): {time.time()-t0:.2f}s")
+
+    out = np.clip(out[0].transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
+    return Image.fromarray(out, 'RGB')
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

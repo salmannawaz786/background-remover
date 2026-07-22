@@ -657,6 +657,41 @@ def health():
     return jsonify(health_data)
 
 
+@app.route('/upscale', methods=['POST'])
+def upscale():
+    """AI upscale an image 4x with Real-ESRGAN (input capped at 256px -> max 1024px out)."""
+    if 'image_file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['image_file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    filepath = None
+    try:
+        from model_manager_v4 import upscale_image
+        filename = f"up_{str(uuid.uuid4())[:8]}_{secure_filename(file.filename)}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+
+        with Image.open(filepath) as img:
+            result = upscale_image(img)
+
+        img_io = io.BytesIO()
+        result.save(img_io, 'PNG', compress_level=3)
+        img_io.seek(0)
+        return send_file(img_io, mimetype='image/png')
+    except Exception as e:
+        logger.error(f"Upscale error: {e}")
+        return jsonify({'error': 'Upscale failed. Please try again.'}), 500
+    finally:
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+
+
 @app.route('/api/queue/stats')
 def queue_stats():
     """Get detailed queue statistics"""

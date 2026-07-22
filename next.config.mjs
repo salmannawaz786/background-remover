@@ -21,6 +21,10 @@ const nextConfig = {
         destination: `${backend}/upload`,
       },
       {
+        source: "/upscale",
+        destination: `${backend}/upscale`,
+      },
+      {
         source: "/health",
         destination: `${backend}/health`,
       },

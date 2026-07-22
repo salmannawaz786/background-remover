@@ -143,6 +143,22 @@ export async function removeBackgroundClient(
   }
 }
 
+/**
+ * Server-side AI upscale via Real-ESRGAN (fallback when on-device model isn't available).
+ */
+export async function upscaleImageServer(imageFile: File | Blob): Promise<Blob | null> {
+  try {
+    const form = new FormData();
+    const filename = imageFile instanceof File ? imageFile.name : "image.png";
+    form.append("image_file", imageFile, filename);
+    const res = await fetch(`${API_BASE}/upscale`, { method: "POST", body: form });
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
+
 export async function downloadProModel(onProgress?: (pct: number) => void): Promise<void> {
   try {
     const w = window as unknown as Record<string, unknown>;

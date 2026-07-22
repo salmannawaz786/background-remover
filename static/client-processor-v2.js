@@ -27,6 +27,11 @@ const ClientProcessor = (() => {
             id: 'brefnet-lite-fp16',
             url: 'https://huggingface.co/salluu3432/bg-remover-models/resolve/main/model_fp16.onnx',
             size: 98
+        },
+        realesr: {
+            id: 'realesr-x4-compact',
+            url: 'https://huggingface.co/salluu3432/bg-remover-models/resolve/main/realesr_x4.onnx',
+            size: 4.6
         }
     };
 
@@ -35,12 +40,15 @@ const ClientProcessor = (() => {
     let _rvmSession = null;
     let _u2netpSession = null;
     let _brefnetSession = null;
+    let _realesrSession = null;
     let _rvmReady = false;
     let _u2netpReady = false;
     let _brefnetReady = false;
+    let _realesrReady = false;
     let _rvmDownloading = false;
     let _u2netpDownloading = false;
     let _brefnetDownloading = false;
+    let _realesrDownloading = false;
     let _faceDetector = null;
     let _faceDetectorSupported = false;
     let _deviceInfo = { capable: true, isMobile: false };
@@ -405,6 +413,51 @@ const ClientProcessor = (() => {
         return canvas.toDataURL('image/png');
     }
 
+    // ── Real-ESRGAN x4 Upscale (on demand) ─────────────────────────────────
+
+    async function runUpscale(imageElement) {
+        if (!_realesrSession) throw new Error('Real-ESRGAN not loaded');
+        const MAX_IN = 256;
+        let W = imageElement.naturalWidth || imageElement.width;
+        let H = imageElement.naturalHeight || imageElement.height;
+        const scale = Math.min(MAX_IN / Math.max(W, H), 1.0);
+        const tw = Math.max(1, Math.round(W * scale));
+        const th = Math.max(1, Math.round(H * scale));
+
+        const resizeCanvas = document.createElement('canvas');
+        resizeCanvas.width = tw; resizeCanvas.height = th;
+        const resizeCtx = resizeCanvas.getContext('2d');
+        resizeCtx.drawImage(imageElement, 0, 0, tw, th);
+        const pixels = resizeCtx.getImageData(0, 0, tw, th).data;
+
+        const input = new Float32Array(3 * tw * th);
+        for (let i = 0; i < tw * th; i++) {
+            input[i] = pixels[i * 4] / 255;
+            input[tw * th + i] = pixels[i * 4 + 1] / 255;
+            input[2 * tw * th + i] = pixels[i * 4 + 2] / 255;
+        }
+
+        const inputTensor = new ort.Tensor('float32', input, [1, 3, th, tw]);
+        const inputName = _realesrSession.inputNames[0];
+        const results = await _realesrSession.run({ [inputName]: inputTensor });
+        const outData = results[_realesrSession.outputNames[0]].data;
+
+        const outW = tw * 4, outH = th * 4;
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = outW; outCanvas.height = outH;
+        const outCtx = outCanvas.getContext('2d');
+        const outImage = outCtx.createImageData(outW, outH);
+        const planeSize = outW * outH;
+        for (let i = 0; i < planeSize; i++) {
+            outImage.data[i * 4]     = Math.min(255, Math.max(0, Math.round(outData[i] * 255)));
+            outImage.data[i * 4 + 1] = Math.min(255, Math.max(0, Math.round(outData[planeSize + i] * 255)));
+            outImage.data[i * 4 + 2] = Math.min(255, Math.max(0, Math.round(outData[2 * planeSize + i] * 255)));
+            outImage.data[i * 4 + 3] = 255;
+        }
+        outCtx.putImageData(outImage, 0, 0);
+        return outCanvas.toDataURL('image/png');
+    }
+
     // ── Device Detection ─────────────────────────────────────────────────────
 
     function isMobile() {
@@ -528,6 +581,36 @@ const ClientProcessor = (() => {
         // Pro model ready (only on capable devices)
         isModelReady() {
             return getProModelForDevice() === 'brefnet' && _brefnetReady;
+        },
+
+        // ── Real-ESRGAN upscaler (downloaded on demand only) ──
+        isUpscaleReady() { return _realesrReady; },
+        isUpscaleDownloading() { return _realesrDownloading; },
+
+        async loadUpscaleModel(onProgress) {
+            if (_realesrReady) return;
+            if (_realesrDownloading) {
+                // Wait for ongoing download
+                while (_realesrDownloading) await new Promise(r => setTimeout(r, 500));
+                return;
+            }
+            _realesrDownloading = true;
+            try {
+                const modelBuffer = await downloadModel(MODELS.realesr.id, MODELS.realesr.url, onProgress);
+                _realesrSession = await createONNXSession(modelBuffer);
+                _realesrReady = true;
+            } catch (e) {
+                console.error('[ClientAI] Real-ESRGAN load FAILED:', e.message);
+                _realesrReady = false;
+                throw e;
+            } finally {
+                _realesrDownloading = false;
+            }
+        },
+
+        async upscaleImage(imageElement) {
+            if (!_realesrReady) throw new Error('upscale_model_not_ready');
+            return await runUpscale(imageElement);
         },
 
         // Kept for backwards-compat with editor page

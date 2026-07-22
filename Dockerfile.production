@@ -49,6 +49,7 @@ COPY requirements.txt .
 COPY model_fp16.onnx .
 COPY rvm.onnx .
 COPY rmbg14.onnx .
+COPY realesr_x4.onnx .
 
 # Create necessary directories
 RUN mkdir -p uploads .model_cache .onnx_cache static
