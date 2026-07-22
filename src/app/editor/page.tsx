@@ -16,7 +16,7 @@ import LoadingState from "@/components/editor/LoadingState";
 import FinalEditor, { type BgChoice } from "@/components/editor/FinalEditor";
 import UserMenu from "@/components/editor/UserMenu";
 import BulkUploader from "@/components/editor/BulkUploader";
-import CropModal from "@/components/editor/CropModal";
+import CropModal, { cropImageToBlob, type CropArea } from "@/components/editor/CropModal";
 
 type EditorTab = "single" | "bulk";
 
@@ -37,12 +37,37 @@ export default function EditorPage() {
   const [cropOpen, setCropOpen] = useState(false);
   const newImageInputRef = useRef<HTMLInputElement>(null);
 
-  const handleCropDone = useCallback((croppedBlob: Blob) => {
-    const url = URL.createObjectURL(croppedBlob);
-    setResultImage(url);
+  const BORDER_PRESETS = [
+    { color: "#ffffff", label: "White" },
+    { color: "#000000", label: "Black" },
+    { color: "#dcb15c", label: "Gold" },
+    { color: "#ef4444", label: "Red" },
+    { color: "#3b82f6", label: "Blue" },
+    { color: "#22c55e", label: "Green" },
+    { color: "#8b5cf6", label: "Purple" },
+    { color: "#ec4899", label: "Pink" },
+  ];
+  const [borderColor, setBorderColor] = useState<string | null>(null);
+  const [borderWidth, setBorderWidth] = useState(20);
+
+  const handleCropDone = useCallback(async (area: CropArea) => {
+    if (!uploadedImage || !resultImage) return;
     setCropOpen(false);
-    toast.success("Image cropped");
-  }, [setResultImage]);
+    toast.info("Cropping both images...");
+    try {
+      const [origBlob, resBlob] = await Promise.all([
+        cropImageToBlob(uploadedImage, area),
+        cropImageToBlob(resultImage, area),
+      ]);
+      const origUrl = URL.createObjectURL(origBlob);
+      const resUrl = URL.createObjectURL(resBlob);
+      setUploadedImage(origUrl, null);
+      setResultImage(resUrl);
+      toast.success("Image cropped");
+    } catch {
+      toast.error("Crop failed");
+    }
+  }, [uploadedImage, resultImage, setUploadedImage, setResultImage]);
 
   // Lift bg choice out of FinalEditor so we can apply it on download
   const [bgChoice, setBgChoice] = useState<BgChoice>({ mode: "transparent", color: "#ffffff", image: null });
@@ -228,76 +253,64 @@ export default function EditorPage() {
     const mime = outputFormat === "png" ? "image/png" : "image/webp";
 
     const choice = finalEditorRef.current?.getBg() ?? bgChoice;
-    const needsComposite = choice.mode === "color" || (choice.mode === "image" && !!choice.image);
+    const needsComposite = choice.mode === "color" || (choice.mode === "image" && !!choice.image) || !!borderColor;
 
-    if (!needsComposite) {
-      const a = document.createElement("a");
-      a.href = resultImage;
-      a.download = `sallulabs-bg-removed.${ext}`;
-      a.click();
-      return;
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.src = resultImage;
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("Failed to load result image"));
+    });
+
+    const bw = borderColor ? Math.round(borderWidth * Math.max(img.naturalWidth, img.naturalHeight) / 1024) : 0;
+    const canvasW = img.naturalWidth + bw * 2;
+    const canvasH = img.naturalHeight + bw * 2;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { toast.error("Canvas not supported"); return; }
+
+    if (borderColor) {
+      ctx.fillStyle = borderColor;
+      ctx.fillRect(0, 0, canvasW, canvasH);
     }
 
-    // Composite onto canvas
-    try {
-      const img = new window.Image();
-      img.crossOrigin = "anonymous";
-      img.src = resultImage;
+    if (choice.mode === "color") {
+      ctx.fillStyle = choice.color;
+      ctx.fillRect(bw, bw, img.naturalWidth, img.naturalHeight);
+    } else if (choice.mode === "image" && choice.image) {
+      const bg = new window.Image();
+      bg.crossOrigin = "anonymous";
+      bg.src = choice.image;
       await new Promise<void>((res, rej) => {
-        img.onload = () => res();
-        img.onerror = () => rej(new Error("Failed to load result image"));
+        bg.onload = () => res();
+        bg.onerror = () => rej(new Error("Failed to load background image"));
       });
-
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Canvas not supported");
-
-      if (choice.mode === "color") {
-        ctx.fillStyle = choice.color;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      } else if (choice.mode === "image" && choice.image) {
-        const bg = new window.Image();
-        bg.crossOrigin = "anonymous";
-        bg.src = choice.image;
-        await new Promise<void>((res, rej) => {
-          bg.onload = () => res();
-          bg.onerror = () => rej(new Error("Failed to load background image"));
-        });
-        // Cover-style background
-        const scale = Math.max(canvas.width / bg.naturalWidth, canvas.height / bg.naturalHeight);
-        const w = bg.naturalWidth * scale;
-        const h = bg.naturalHeight * scale;
-        const x = (canvas.width - w) / 2;
-        const y = (canvas.height - h) / 2;
-        ctx.drawImage(bg, x, y, w, h);
-      }
-
-      ctx.drawImage(img, 0, 0);
-
-      const blob: Blob = await new Promise((res, rej) => {
-        canvas.toBlob(
-          (b) => (b ? res(b) : rej(new Error("toBlob failed"))),
-          mime,
-          outputFormat === "webp" ? 0.95 : undefined
-        );
-      });
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `sallulabs-bg-removed.${ext}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (err) {
-      console.error("Composite download error:", err);
-      // Fallback to direct download
-      const a = document.createElement("a");
-      a.href = resultImage;
-      a.download = `sallulabs-bg-removed.${ext}`;
-      a.click();
+      const scale = Math.max(img.naturalWidth / bg.naturalWidth, img.naturalHeight / bg.naturalHeight);
+      const w = bg.naturalWidth * scale;
+      const h = bg.naturalHeight * scale;
+      ctx.drawImage(bg, bw + (img.naturalWidth - w) / 2, bw + (img.naturalHeight - h) / 2, w, h);
     }
+
+    ctx.drawImage(img, bw, bw);
+
+    const blob: Blob = await new Promise((res, rej) => {
+      canvas.toBlob(
+        (b) => (b ? res(b) : rej(new Error("toBlob failed"))),
+        mime,
+        outputFormat === "webp" ? 0.95 : undefined
+      );
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sallulabs-bg-removed.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handleDownload = () => {
@@ -494,8 +507,43 @@ export default function EditorPage() {
                 onBgChange={setBgChoice}
               />
 
+              {/* Border controls */}
+              <div className="glass rounded-2xl border border-[var(--glass-border)] p-3 sm:p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs sm:text-sm font-medium text-foreground">Border</span>
+                  {borderColor && (
+                    <button onClick={() => setBorderColor(null)}
+                      className="text-[10px] sm:text-xs text-muted-foreground hover:text-foreground transition-all">
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <button onClick={() => setBorderColor(null)}
+                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[8px] transition-all ${!borderColor ? "border-primary text-primary" : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"}`}
+                    title="No border">
+                    <X size={10} />
+                  </button>
+                  {BORDER_PRESETS.map((p) => (
+                    <button key={p.color} onClick={() => setBorderColor(p.color)}
+                      className={`w-6 h-6 rounded-full border-2 transition-all ${borderColor === p.color ? "border-primary scale-110" : "border-muted-foreground/30 hover:border-foreground/50"}`}
+                      style={{ backgroundColor: p.color }}
+                      title={p.label} />
+                  ))}
+                </div>
+                {borderColor && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] sm:text-xs text-muted-foreground whitespace-nowrap">Width</span>
+                    <input type="range" min={5} max={100} step={1} value={borderWidth}
+                      onChange={(e) => setBorderWidth(Number(e.target.value))}
+                      className="flex-1 accent-amber-500" />
+                    <span className="text-[10px] sm:text-xs text-muted-foreground w-8 text-right">{borderWidth}</span>
+                  </div>
+                )}
+              </div>
+
               <p className="text-[10px] sm:text-xs text-muted-foreground text-center px-2">
-                Drag the slider to compare before & after. Use the controls below to add a background.
+                Drag the slider to compare before & after. Use the controls below to add a background or border.
               </p>
             </motion.div>
 
